@@ -1,6 +1,7 @@
 <div align="center">
 <h1>Gemini Next Chat</h1>
 
+
 ![GitHub deployments](https://img.shields.io/github/deployments/u14app/gemini-next-chat/Production)
 ![GitHub Release](https://img.shields.io/github/v/release/u14app/gemini-next-chat)
 ![Docker Image Size (tag)](https://img.shields.io/docker/image-size/xiangfa/talk-with-gemini/latest)
