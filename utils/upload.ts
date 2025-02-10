@@ -1,12 +1,12 @@
 import imageCompression from 'browser-image-compression'
 import FileManager, { type FileManagerOptions } from '@/utils/FileManager'
-import FibonacciTimer from '@/utils/FibonacciTimer'
 import { encodeBase64 } from '@/utils/signature'
-import { formatSize } from '@/utils/common'
+import { formatSize, readFileAsDataURL } from '@/utils/common'
 import { isNull, isFunction, isString } from 'lodash-es'
 
 type fileUploadOptions = {
   files: FileList | File[] | null
+  uploadLimit: number
   fileManagerOptions: FileManagerOptions
   addAttachment: (fileInfor: FileInfor) => void
   updateAttachment: (id: string, fileInfor: FileInfor) => void
@@ -20,17 +20,16 @@ type imageUploadOptions = {
   onError?: (error: string) => void
 }
 
-const UPLOAD_SIZE_LIMIT = Number(process.env.NEXT_PUBLIC_UPLOAD_LIMIT || '0')
-
 const compressionOptions = {
-  maxSizeMB: 2,
-  maxWidthOrHeight: 1024,
+  maxSizeMB: 4,
   useWebWorker: true,
   initialQuality: 0.85,
+  libURL: 'scripts/browser-image-compression.js',
 }
 
 export async function fileUpload({
   files,
+  uploadLimit,
   fileManagerOptions,
   addAttachment,
   updateAttachment,
@@ -40,13 +39,13 @@ export async function fileUpload({
   if (fileManagerOptions.token === '' || fileManagerOptions.apiKey === '') return false
 
   for await (const file of files) {
-    if (UPLOAD_SIZE_LIMIT > 0 && file.size > UPLOAD_SIZE_LIMIT) {
-      const errorMessage = `File size larger than ${formatSize(UPLOAD_SIZE_LIMIT)} limit!`
+    if (uploadLimit > 0 && file.size > uploadLimit) {
+      const errorMessage = `File size larger than ${formatSize(uploadLimit)} limit!`
       if (isFunction(onError)) onError(errorMessage)
       throw new Error(errorMessage)
     }
     const fileInfor: FileInfor = {
-      id: encodeBase64(`${file.name}:${file.type}:${file.type}`),
+      id: encodeBase64(`${file.name}:${file.type}:${file.size}`),
       name: file.name,
       mimeType: file.type,
       size: file.size,
@@ -56,7 +55,7 @@ export async function fileUpload({
     if (file.type.startsWith('image/')) {
       const compressedFile = await imageCompression(file, compressionOptions)
       uploadFile = new File([compressedFile], file.name, { type: file.type })
-      fileInfor.preview = await imageCompression.getDataUrlFromFile(uploadFile)
+      fileInfor.dataUrl = await imageCompression.getDataUrlFromFile(uploadFile)
       fileInfor.size = uploadFile.size
     } else {
       uploadFile = file
@@ -65,7 +64,6 @@ export async function fileUpload({
 
     const checkFileStatus = async (fileMeta: FileMetadata) => {
       if (fileMeta.state === 'PROCESSING') {
-        const fibonacciTimer = new FibonacciTimer()
         const task = async () => {
           const fileManager = new FileManager(fileManagerOptions)
           const fileMetadata: FileMetadata = await fileManager.getFileMetadata(fileMeta.name.substring(6))
@@ -73,10 +71,11 @@ export async function fileUpload({
             fileInfor.status = fileMetadata.state
             fileInfor.metadata = fileMetadata
             updateAttachment(fileInfor.id, fileInfor)
-            fibonacciTimer.stopTimer()
+          } else {
+            setTimeout(task, 2000)
           }
         }
-        fibonacciTimer.startTimer(task, 1000, 1)
+        setTimeout(task, 2000)
       } else {
         fileInfor.status = fileMeta.state
         fileInfor.metadata = fileMeta
@@ -86,8 +85,15 @@ export async function fileUpload({
     }
 
     const fileManager = new FileManager(fileManagerOptions)
-    // Files smaller than 4MB are uploaded directly
-    if (file.size <= 4194304) {
+    if (uploadFile.size <= 2097152) {
+      // If the file is smaller than 2MB, use DataUrl
+      fileInfor.status = 'ACTIVE'
+      if (!fileInfor.dataUrl) {
+        fileInfor.dataUrl = await readFileAsDataURL(uploadFile)
+      }
+      updateAttachment(fileInfor.id, fileInfor)
+    } else if (file.size <= 8388608) {
+      // If the file is smaller than 8MB are uploaded directly
       fileManager
         .uploadFile(uploadFile)
         .then((fileMetadata) => {
@@ -129,7 +135,7 @@ export async function imageUpload({ files, addAttachment, updateAttachment, onEr
   if (isNull(files)) return false
   for await (const file of files) {
     const fileInfor: FileInfor = {
-      id: encodeBase64(`${file.name}:${file.type}:${file.type}`),
+      id: encodeBase64(`${file.name}:${file.type}:${file.size}`),
       name: file.name,
       mimeType: file.type,
       size: file.size,
@@ -144,7 +150,7 @@ export async function imageUpload({ files, addAttachment, updateAttachment, onEr
       }
     })
     if (compressedFile) {
-      fileInfor.preview = await imageCompression.getDataUrlFromFile(compressedFile)
+      fileInfor.dataUrl = await imageCompression.getDataUrlFromFile(compressedFile)
       fileInfor.size = compressedFile.size
       fileInfor.status = 'ACTIVE'
       updateAttachment(fileInfor.id, fileInfor)

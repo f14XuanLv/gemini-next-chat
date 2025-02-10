@@ -15,6 +15,7 @@ import Button from '@/components/Button'
 import { useMessageStore } from '@/store/chat'
 import { useAssistantStore } from '@/store/assistant'
 import { useSettingStore } from '@/store/setting'
+import { ASSISTANT_INDEX_URL } from '@/constant/urls'
 import AssistantMarketUrl from '@/utils/AssistantMarketUrl'
 
 type AssistantProps = {
@@ -52,7 +53,7 @@ function AssistantMarket(props: AssistantProps) {
   const assistants = useAssistantStore((state) => state.assistants)
   const favorites = useAssistantStore((state) => state.favorites)
   const lang = useSettingStore((state) => state.lang)
-  const assistantIndexUrl = useSettingStore((state) => state.assistantIndexUrl)
+  const assistantIndexUrl = useSettingStore((state) => state.assistantIndexUrl || ASSISTANT_INDEX_URL)
   const [assistantList, setAssistantList] = useState<AssistantDetail[]>([])
   const [tagList, setTagList] = useState<string[]>([])
   const [currentTag, setCurrentTag] = useState<string>('all')
@@ -230,7 +231,7 @@ function AssistantMarket(props: AssistantProps) {
           </CardHeader>
           <CardContent className="text-line-clamp-2 mb-2 h-10 px-4 text-sm">{assistant.meta.description}</CardContent>
           <CardFooter className="flex justify-between p-3 px-4 pt-0 text-sm">
-            <span>{assistant.createAt}</span>
+            <span>{assistant.createdAt}</span>
             {assistant.author ? (
               <a
                 className="inline-block underline-offset-4 hover:underline"

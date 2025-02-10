@@ -1,29 +1,31 @@
 'use client'
-import { memo, useCallback, useLayoutEffect, useMemo, useState } from 'react'
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useState } from 'react'
 import { EdgeSpeech } from '@xiangfa/polly'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { useForm } from 'react-hook-form'
 import { z } from 'zod'
 import { useTranslation } from 'react-i18next'
-import { MonitorDown } from 'lucide-react'
+import { MonitorDown, RefreshCw } from 'lucide-react'
 import { usePWAInstall } from 'react-use-pwa-install'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Form, FormControl, FormField, FormItem, FormLabel } from '@/components/ui/form'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { Button } from '@/components/ui/button'
 import { Slider } from '@/components/ui/slider'
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group'
 import { Switch } from '@/components/ui/switch'
+import { useToast } from '@/components/ui/use-toast'
+import Button from '@/components/Button'
 import ResponsiveDialog from '@/components/ResponsiveDialog'
-import i18n from '@/plugins/i18n'
+import i18n from '@/utils/i18n'
 import { fetchModels } from '@/utils/models'
 import locales from '@/constant/locales'
-import { Model } from '@/constant/model'
-import { useSettingStore } from '@/store/setting'
+import { Model, DefaultModel } from '@/constant/model'
+import { GEMINI_API_BASE_URL, ASSISTANT_INDEX_URL } from '@/constant/urls'
+import { useSettingStore, useEnvStore } from '@/store/setting'
 import { useModelStore } from '@/store/model'
-import { toPairs, values, keys, omitBy, isFunction } from 'lodash-es'
+import { toPairs, values, keys, omitBy, isFunction, find } from 'lodash-es'
 
 import pkg from '@/package.json'
 
@@ -33,21 +35,18 @@ type SettingProps = {
   onClose: () => void
 }
 
-const GEMINI_MODEL_LIST = process.env.NEXT_PUBLIC_GEMINI_MODEL_LIST
-
 const formSchema = z.object({
   password: z.string().optional(),
-  assistantIndexUrl: z.string().url({ message: 'Invalid url' }),
+  assistantIndexUrl: z.string().optional(),
   lang: z.string().optional(),
   apiKey: z.string().optional(),
-  apiProxy: z.string().url({ message: 'Invalid url' }).optional(),
-  uploadProxy: z.string().url({ message: 'Invalid url' }).optional(),
+  apiProxy: z.string().optional(),
   model: z.string(),
   maxHistoryLength: z.number().gte(0).lte(50).optional().default(0),
-  topP: z.number().gte(0).lte(1).default(0.95),
-  topK: z.number().gte(0).lte(128).default(40),
-  temperature: z.number().gte(0).lte(1).default(1),
-  maxOutputTokens: z.number().gte(0).lte(8192).default(8192),
+  topP: z.number(),
+  topK: z.number(),
+  temperature: z.number(),
+  maxOutputTokens: z.number(),
   safety: z.enum(['none', 'low', 'middle', 'high']).default('none'),
   sttLang: z.string().optional(),
   ttsLang: z.string().optional(),
@@ -57,20 +56,23 @@ const formSchema = z.object({
 
 let cachedModelList = false
 
+function filterModel(models: Model[] = []) {
+  return models.filter((model) => model.name.startsWith('models/gemini-'))
+}
+
 function Setting({ open, hiddenTalkPanel, onClose }: SettingProps) {
   const { t } = useTranslation()
+  const { toast } = useToast()
   const pwaInstall = usePWAInstall()
-  const settingStore = useSettingStore()
   const modelStore = useModelStore()
+  const { isProtected, buildMode, modelList: MODEL_LIST } = useEnvStore()
   const [ttsLang, setTtsLang] = useState<string>('')
-  const isProtected = useMemo(() => {
-    return settingStore.isProtected
-  }, [settingStore.isProtected])
+  const [hiddenPasswordInput, setHiddenPasswordInput] = useState<boolean>(false)
   const voiceOptions = useMemo(() => {
     return new EdgeSpeech({ locale: ttsLang }).voiceOptions || []
   }, [ttsLang])
   const modelOptions = useMemo(() => {
-    const { update } = useSettingStore.getState()
+    const { model, update } = useSettingStore.getState()
 
     if (modelStore.models.length > 0) {
       const models = values(Model)
@@ -83,15 +85,15 @@ function Setting({ open, hiddenTalkPanel, onClose }: SettingProps) {
     }
 
     let modelList: string[] = []
-    let defaultModel = 'gemini-1.5-flash-latest'
+    let defaultModel = DefaultModel
     const defaultModelList: string[] = keys(Model)
-    const userModels: string[] = GEMINI_MODEL_LIST ? GEMINI_MODEL_LIST.split(',') : []
+    const userModels: string[] = MODEL_LIST ? MODEL_LIST.split(',') : []
 
     userModels.forEach((modelName) => {
+      for (const name of defaultModelList) {
+        if (!modelList.includes(name)) modelList.push(name)
+      }
       if (modelName === 'all' || modelName === '+all') {
-        for (const name of defaultModelList) {
-          if (!modelList.includes(name)) modelList.push(name)
-        }
       } else if (modelName === '-all') {
         modelList = modelList.filter((name) => !defaultModelList.includes(name))
       } else if (modelName.startsWith('-')) {
@@ -99,20 +101,22 @@ function Setting({ open, hiddenTalkPanel, onClose }: SettingProps) {
       } else if (modelName.startsWith('@')) {
         const name = modelName.substring(1)
         if (!modelList.includes(name)) modelList.push(name)
-        update({ model: name })
-        defaultModel = name
+        if (model === '') {
+          update({ model: name })
+          defaultModel = name
+        }
       } else {
         modelList.push(modelName.startsWith('+') ? modelName.substring(1) : modelName)
       }
     })
 
     const models = modelList.length > 0 ? modelList : defaultModelList
-    if (!models.includes(defaultModel)) {
+    if (models.length > 0 && !models.includes(defaultModel)) {
       update({ model: models[0] })
     }
 
     return models
-  }, [modelStore.models])
+  }, [modelStore.models, MODEL_LIST])
 
   const form = useForm<z.infer<typeof formSchema>>({
     resolver: zodResolver(formSchema),
@@ -152,26 +156,73 @@ function Setting({ open, hiddenTalkPanel, onClose }: SettingProps) {
     })
   }
 
-  const handleSubmit = useCallback(
-    (values: z.infer<typeof formSchema>) => {
-      settingStore.update(values as Partial<Setting>)
-      onClose()
+  const handleModelChange = useCallback(
+    (name: string) => {
+      const currentModel = find(modelStore.models, { name: `models/${name}` })
+      if (currentModel) {
+        const { topP, topK, temperature, outputTokenLimit } = currentModel
+        if (topP) form.setValue('topP', topP)
+        if (topK) form.setValue('topK', topK)
+        if (temperature) form.setValue('temperature', temperature)
+        if (outputTokenLimit) form.setValue('maxOutputTokens', outputTokenLimit)
+      }
     },
-    [onClose, settingStore],
+    [form, modelStore.models],
   )
 
-  useLayoutEffect(() => {
-    if (open && !cachedModelList) {
-      const { update } = useModelStore.getState()
-      const { apiKey, apiProxy, password } = useSettingStore.getState()
-      fetchModels({ apiKey, apiProxy, password }).then((models) => {
+  const handleReset = useCallback(() => {
+    const { reset } = useSettingStore.getState()
+    const defaultValues = reset()
+    form.reset(defaultValues)
+  }, [form])
+
+  const handleSubmit = useCallback(
+    (values: z.infer<typeof formSchema>) => {
+      const { update } = useSettingStore.getState()
+      update(values as Partial<Setting>)
+      onClose()
+    },
+    [onClose],
+  )
+
+  const handlePwaInstall = useCallback(async () => {
+    if ('serviceWorker' in navigator && window.serwist !== undefined) {
+      await window.serwist.register()
+    }
+    if (pwaInstall) await pwaInstall()
+  }, [pwaInstall])
+
+  const uploadModelList = useCallback(() => {
+    const { update: updateModelList } = useModelStore.getState()
+    const { apiKey, apiProxy, password } = useSettingStore.getState()
+    if (apiKey || password || !isProtected) {
+      fetchModels({ apiKey, apiProxy, password }).then((result) => {
+        if (result.error) {
+          return toast({
+            description: result.error.message,
+            duration: 3000,
+          })
+        }
+        const models = filterModel(result.models)
         if (models.length > 0) {
-          update(models)
+          updateModelList(models)
           cachedModelList = true
         }
       })
     }
-  }, [open])
+  }, [isProtected, toast])
+
+  useEffect(() => {
+    if (open && !cachedModelList) {
+      uploadModelList()
+    }
+  }, [open, uploadModelList])
+
+  useLayoutEffect(() => {
+    if (buildMode === 'export' || !isProtected) {
+      setHiddenPasswordInput(true)
+    }
+  }, [buildMode, isProtected])
 
   return (
     <ResponsiveDialog
@@ -209,38 +260,28 @@ function Setting({ open, hiddenTalkPanel, onClose }: SettingProps) {
             </TabsList>
             <TabsContent value="general">
               <div className="grid w-full gap-4 px-4 py-4 max-sm:px-0">
-                <FormField
-                  control={form.control}
-                  name="password"
-                  render={({ field }) => (
-                    <FormItem className="grid grid-cols-4 items-center gap-4 space-y-0">
-                      <FormLabel className="text-right">
-                        {isProtected ? <span className="leading-12 mr-1 text-red-500">*</span> : null}
-                        {t('accessPassword')}
-                      </FormLabel>
-                      <FormControl>
-                        <Input
-                          className="col-span-3"
-                          type="password"
-                          placeholder={t('accessPasswordPlaceholder')}
-                          {...field}
-                        />
-                      </FormControl>
-                    </FormItem>
-                  )}
-                />
-                <FormField
-                  control={form.control}
-                  name="assistantIndexUrl"
-                  render={({ field }) => (
-                    <FormItem className="grid grid-cols-4 items-center gap-4 space-y-0">
-                      <FormLabel className="text-right">{t('assistantMarketUrl')}</FormLabel>
-                      <FormControl>
-                        <Input className="col-span-3" placeholder={t('assistantMarketUrl')} {...field} />
-                      </FormControl>
-                    </FormItem>
-                  )}
-                />
+                {!hiddenPasswordInput ? (
+                  <FormField
+                    control={form.control}
+                    name="password"
+                    render={({ field }) => (
+                      <FormItem className="grid grid-cols-4 items-center gap-4 space-y-0">
+                        <FormLabel className="text-right">
+                          {isProtected ? <span className="leading-12 mr-1 text-red-500">*</span> : null}
+                          {t('accessPassword')}
+                        </FormLabel>
+                        <FormControl>
+                          <Input
+                            className="col-span-3"
+                            type="password"
+                            placeholder={t('accessPasswordPlaceholder')}
+                            {...field}
+                          />
+                        </FormControl>
+                      </FormItem>
+                    )}
+                  />
+                ) : null}
                 <FormField
                   control={form.control}
                   name="lang"
@@ -263,12 +304,27 @@ function Setting({ open, hiddenTalkPanel, onClose }: SettingProps) {
                 {pwaInstall ? (
                   <div className="grid grid-cols-4 items-center gap-4 space-y-0">
                     <Label className="text-right">{t('installPwa')}</Label>
-                    <Button className="col-span-3" variant="ghost" onClick={() => pwaInstall()}>
+                    <Button className="col-span-3" type="button" variant="ghost" onClick={() => handlePwaInstall()}>
                       <MonitorDown className="mr-1.5 h-4 w-4" />
                       {t('pwaInstall')}
                     </Button>
                   </div>
                 ) : null}
+                <div className="grid grid-cols-4 items-center gap-4 space-y-0">
+                  <Label className="text-right">{t('resetSetting')}</Label>
+                  <Button
+                    className="col-span-3 hover:text-red-500"
+                    type="button"
+                    variant="ghost"
+                    onClick={(ev) => {
+                      ev.stopPropagation()
+                      ev.preventDefault()
+                      handleReset()
+                    }}
+                  >
+                    {t('resetAllSettings')}
+                  </Button>
+                </div>
                 <div className="grid grid-cols-4 items-center gap-4 space-y-0">
                   <Label className="text-right">{t('version')}</Label>
                   <div className="col-span-3 text-center leading-10">
@@ -319,7 +375,7 @@ function Setting({ open, hiddenTalkPanel, onClose }: SettingProps) {
                       <FormControl>
                         <Input
                           className="col-span-3"
-                          placeholder={t('apiProxyUrlPlaceholder')}
+                          placeholder={GEMINI_API_BASE_URL}
                           disabled={form.getValues().apiKey === ''}
                           {...field}
                         />
@@ -329,17 +385,12 @@ function Setting({ open, hiddenTalkPanel, onClose }: SettingProps) {
                 />
                 <FormField
                   control={form.control}
-                  name="uploadProxy"
+                  name="assistantIndexUrl"
                   render={({ field }) => (
                     <FormItem className="grid grid-cols-4 items-center gap-4 space-y-0">
-                      <FormLabel className="text-right">{t('uploadProxyUrl')}</FormLabel>
+                      <FormLabel className="text-right">{t('assistantMarketUrl')}</FormLabel>
                       <FormControl>
-                        <Input
-                          className="col-span-3"
-                          placeholder={t('uploadProxyUrlPlaceholder')}
-                          disabled={form.getValues().apiKey === ''}
-                          {...field}
-                        />
+                        <Input className="col-span-3" placeholder={ASSISTANT_INDEX_URL} {...field} />
                       </FormControl>
                     </FormItem>
                   )}
@@ -351,20 +402,37 @@ function Setting({ open, hiddenTalkPanel, onClose }: SettingProps) {
                     <FormItem className="grid grid-cols-4 items-center gap-4 space-y-0">
                       <FormLabel className="text-right">{t('defaultModel')}</FormLabel>
                       <FormControl>
-                        <Select defaultValue={field.value} onValueChange={field.onChange}>
-                          <SelectTrigger className="col-span-3">
-                            <SelectValue placeholder={t('selectDefaultModel')} />
-                          </SelectTrigger>
-                          <SelectContent className="text-left">
-                            {modelOptions.map((name) => {
-                              return (
-                                <SelectItem key={name} value={name}>
-                                  {name}
-                                </SelectItem>
-                              )
-                            })}
-                          </SelectContent>
-                        </Select>
+                        <div className="col-span-3 flex gap-1">
+                          <Select
+                            defaultValue={field.value}
+                            onValueChange={(value) => {
+                              field.onChange(value)
+                              handleModelChange(value)
+                            }}
+                          >
+                            <SelectTrigger className="flex-1">
+                              <SelectValue placeholder={t('selectDefaultModel')} />
+                            </SelectTrigger>
+                            <SelectContent className="text-left">
+                              {modelOptions.map((name) => {
+                                return (
+                                  <SelectItem key={name} value={name}>
+                                    {name}
+                                  </SelectItem>
+                                )
+                              })}
+                            </SelectContent>
+                          </Select>
+                          <Button
+                            type="button"
+                            size="icon"
+                            variant="outline"
+                            title={t('refresh')}
+                            onClick={() => uploadModelList()}
+                          >
+                            <RefreshCw />
+                          </Button>
+                        </div>
                       </FormControl>
                     </FormItem>
                   )}
@@ -449,7 +517,7 @@ function Setting({ open, hiddenTalkPanel, onClose }: SettingProps) {
                           <Slider
                             className="flex-1"
                             defaultValue={[field.value]}
-                            max={1}
+                            max={2}
                             step={0.1}
                             onValueChange={(values) => field.onChange(values[0])}
                           />
@@ -488,7 +556,11 @@ function Setting({ open, hiddenTalkPanel, onClose }: SettingProps) {
                       <FormLabel className="text-right">{t('safety')}</FormLabel>
                       <FormControl>
                         <div className="col-span-3 flex h-10">
-                          <RadioGroup className="grid w-full grid-cols-4" {...field}>
+                          <RadioGroup
+                            className="grid w-full grid-cols-4"
+                            defaultValue={field.value}
+                            onValueChange={(value) => field.onChange(value)}
+                          >
                             <div className="flex items-center space-x-2">
                               <RadioGroupItem value="none" id="none" />
                               <Label htmlFor="none">{t('none')}</Label>

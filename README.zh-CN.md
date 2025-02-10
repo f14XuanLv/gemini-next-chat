@@ -11,12 +11,13 @@
 
 [English](./README.md) · **简体中文**
 
-[![GeminiNextChat](https://trendshift.io/api/badge/repositories/10384)](https://trendshift.io/repositories/10384)
+[![Vercel](https://img.shields.io/badge/Vercel-111111?style=flat&logo=vercel&logoColor=white)](https://vercel.com/new/clone?repository-url=https%3A%2F%2Fgithub.com%2Fu14app%2Fgemini-next-chat&project-name=gemini-next-chat&env=GEMINI_API_KEY&env=ACCESS_PASSWORD&repository-name=gemini-next-chat)
+[![Cloudflare](https://img.shields.io/badge/Cloudflare-F69652?style=flat&logo=cloudflare&logoColor=white)](#部署到-cloudflare)
 
 [![Gemini](https://img.shields.io/badge/Gemini-8E75B2?style=flat&logo=googlegemini&logoColor=white)](https://ai.google.dev/)
-[![Next](https://img.shields.io/badge/Next.js-000000?style=flat&logo=nextdotjs&logoColor=white)](https://nextjs.org/)
+[![Next](https://img.shields.io/badge/Next.js-111111?style=flat&logo=nextdotjs&logoColor=white)](https://nextjs.org/)
 [![Tailwind CSS](https://img.shields.io/badge/Tailwind%20CSS-06B6D4?style=flat&logo=tailwindcss&logoColor=white)](https://tailwindcss.com/)
-[![shadcn/ui](https://img.shields.io/badge/shadcn/ui-000000?style=flat&logo=shadcnui&logoColor=white)](https://ui.shadcn.com/)
+[![shadcn/ui](https://img.shields.io/badge/shadcn/ui-111111?style=flat&logo=shadcnui&logoColor=white)](https://ui.shadcn.com/)
 
 [![Web][Web-image]][web-url]
 [![MacOS][MacOS-image]][download-url]
@@ -58,9 +59,9 @@
 
 简洁的界面，支持图片识别和语音对话
 
-![Gemini 1.5 Flash](./public/screenshots/pc-screenshot-1.png)
+![Gemini](./public/screenshots/pc-screenshot-1.png)
 
-支持 Gemini 1.5 和 Gemini 1.5 Flash 多模态模型
+支持 Gemini 1.5 和 Gemini 2.0 多模态模型
 
 ![Support plugins](./public/screenshots/pc-screenshot-3.jpg)
 
@@ -89,8 +90,8 @@
   - [容器部署（推荐）](#容器部署推荐)
   - [静态部署](#静态部署)
 - [常见问题](#常见问题)
-- [收藏历史](#收藏历史)
 - [开源协议](#开源协议)
+- [收藏历史](#收藏历史)
 
 ## 主要功能
 
@@ -102,7 +103,8 @@
 - 助理市场，拥有数百精选的系统指令
 - 插件系统，内置网络搜索、网页解读、论文搜索、实时天气等多种实用插件
 - 会话列表，让您可以保持重要的会话内容或与 Gemini 讨论不同的话题
-- 完整的 Markdown 支持：LaTex 公式、代码高亮等等
+- 支持 Artifact，让您可以更加优雅地修改对话内容
+- 完整的 Markdown 支持：KaTex 公式、代码高亮, Mermaid 图表等
 - 自动压缩上下文聊天记录，在节省 Token 的同时支持超长对话
 - 隐私安全，所有数据保存在用户浏览器本地
 - 支持 PWA，可以以应用形式运行
@@ -117,13 +119,21 @@
 - [x] 使用 tauri 打包桌面应用
 - [x] 实现基于 functionCall 插件
 - [x] 支持会话列表
+- [x] 支持对话导出功能
+- [ ] 启用 Multimodal Live API
 
 ## 开始使用
 
 1. 获取 [Gemini API Key](https://aistudio.google.com/app/apikey)
-2. 单击
+2. 一键部署项目，可以选择部署到 Vercel
+
    [![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https%3A%2F%2Fgithub.com%2Fu14app%2Fgemini-next-chat&project-name=gemini-next-chat&env=GEMINI_API_KEY&env=ACCESS_PASSWORD&repository-name=gemini-next-chat)
+
 3. 开始使用
+
+### 部署到 Cloudflare
+
+目前项目支持部署到 Cloudflare，但您需要按照 [如何部署到 Cloudflare Page](./docs/How-to-deploy-to-Cloudflare-Page.zh-CN.md) 进行操作。
 
 ### 更新代码
 
@@ -135,7 +145,8 @@
 
 #### `GEMINI_API_KEY`（可选）
 
-您的 Gemini api 密钥。 如果您需要“启用”服务器 api，这是必需的。
+您的 Gemini api 密钥。 如果您需要“启用”服务器 api，这是必需的。**该变量不会影响前端页面上的 Gemini 密钥的值。**
+支持多个 key，每个 key 之间使用 `,` 分隔，即 `key1,key2,key3`
 
 #### `GEMINI_API_BASE_URL`（可选）
 
@@ -143,27 +154,11 @@
 
 > 示例：`http://your-gemini-proxy.com`
 
-覆盖 Gemini api 请求基本 url。**为了避免服务端代理 url 泄漏，不会覆盖前端页面中的链接。**
-
-#### `GEMINI_UPLOAD_BASE_URL`（可选）
-
-> 默认值：`https://generativelanguage.googleapis.com`
-
-> 示例：`http://your-gemini-upload-proxy.com`
-
-覆盖 Gemini 文件上传 api 基本 url。**为了避免服务端代理 url 泄漏，不会覆盖前端页面中的链接。**
+覆盖 Gemini api 请求基本 url。**为了避免服务端代理 url 泄漏，不会覆盖和影响前端页面中的值。**
 
 #### `NEXT_PUBLIC_GEMINI_MODEL_LIST`（可选）
 
 自定义模型列表，默认为: all。
-
-#### `NEXT_PUBLIC_ASSISTANT_INDEX_URL`（可选）
-
-> 默认值：`https://chat-agents.lobehub.com`
-
-> 示例：`http://your-assistant-market-proxy.com`
-
-覆盖助理市场 api 请求基本 url。会同步调整前端界面中的 api 链接。
 
 #### `NEXT_PUBLIC_UPLOAD_LIMIT`（可选）
 
@@ -280,13 +275,13 @@ pnpm build:export
 
 #### 为什么我无法上传 doc、excel 和 ppt 这类常见文档
 
-目前 `Gemini 1.5 Pro` 和 `Gemini 1.5 Flash` 这两个模型支持的大部分的图片、音频、视频和部分文本类的文件。对于其他文档类型，后续将尝试使用 [LangChain.js](https://js.langchain.com/v0.2/docs/introduction/) 来实现。
+目前 `Gemini 1.5` 和 `Gemini 2.0` 这两类模型支持的大部分的图片、音频、视频和部分文本类的文件。对于其他文档类型，后续将尝试使用 [LangChain.js](https://js.langchain.com/v0.2/docs/introduction/) 来实现。
 
 #### 为什么我用 vercel 一键部署后的网站无法在中国正常访问
 
 vercel 部署后生成的域名在几年前就已经被国内网络屏蔽，但并没有屏蔽服务器的 ip 地址。可以自定义域名，就可以在国内正常访问了。由于 vercel 在国内并没有服务器，所以有时候会出现些许的网络波动，属于正常现象。如何设置域名，可以参考我从网上找到的解决文章[Vercel绑定自定义域名](https://docs.tangly1024.com/article/vercel-domain)。
 
-## 感谢
+## 致谢
 
 ### 技术栈
 
@@ -299,12 +294,26 @@ vercel 部署后生成的域名在几年前就已经被国内网络屏蔽，但�
 
 - [Lobe Chat](https://github.com/lobehub/lobe-chat)
 - [ChatGPT-Next-Web](https://github.com/ChatGPTNextWeb/ChatGPT-Next-Web)
-- [GeminiProChat](https://github.com/babaohuang/GeminiProChat)
+- [Open Canvas](https://github.com/langchain-ai/open-canvas)
+
+## 贡献
+
+欢迎为该项目做出贡献！如果您愿意做出贡献，请按照以下步骤操作：
+
+1. 在 GitHub 上 Fork 存储库。
+2. 将您 Fork 的项目克隆到本地工作区。
+3. 为您的更改创建一个新分支。
+4. 进行更改并将其提交到您的分支。
+5. 将您的更改推送到 GitHub 上的分叉。
+6. 从您的分支向主存储库提交拉取请求。
+
+在提交拉取请求之前，请确保您的代码遵循项目的编码风格并且所有测试都通过。
+如果您发现任何错误或有改进建议，请随时在 GitHub 上创建新的 issue。
+
+## 开源协议
+
+本项目遵循 [MIT](https://www.apache.org/licenses/LICENSE-2.0) 许可证。请参阅 LICENSE 文件以获取完整的许可证文本。
 
 ## 收藏历史
 
 [![Star History Chart](https://api.star-history.com/svg?repos=u14app/gemini-next-chat&type=Date)](https://star-history.com/#u14app/gemini-next-chat&Date)
-
-## 开源协议
-
-[MIT](https://www.apache.org/licenses/LICENSE-2.0)

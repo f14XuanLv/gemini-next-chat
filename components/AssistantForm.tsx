@@ -10,6 +10,7 @@ import { Input } from '@/components/ui/input'
 import Button from '@/components/Button'
 import { useAssistantStore } from '@/store/assistant'
 import { useSettingStore } from '@/store/setting'
+import { GEMINI_API_BASE_URL, ASSISTANT_INDEX_URL } from '@/constant/urls'
 import { encodeToken } from '@/utils/signature'
 import optimizePrompt, { type RequestProps } from '@/utils/optimizePrompt'
 import AssistantMarketUrl from '@/utils/AssistantMarketUrl'
@@ -27,7 +28,7 @@ const nanoid = customAlphabet('1234567890abcdefghijklmnopqrstuvwxyz', 12)
 
 const assistantSchema = {
   author: '',
-  createAt: dayjs().format('YYYY-MM-DD'),
+  createdAt: dayjs().format('YYYY-MM-DD'),
   homepage: '',
   identifier: '',
   meta: {
@@ -102,14 +103,13 @@ function AssistantForm(props: Props) {
   const optimizeAssistantPrompt = useCallback(async () => {
     const content = form.getValues('systemInstruction')
     if (content === '') return false
-    const { apiKey, apiProxy, model, password } = useSettingStore.getState()
+    const { apiKey, apiProxy, password } = useSettingStore.getState()
     const config: RequestProps = {
       apiKey,
-      model,
       content,
     }
     if (apiKey !== '') {
-      if (apiProxy) config.baseUrl = apiProxy
+      config.baseUrl = apiProxy || GEMINI_API_BASE_URL
     } else {
       config.apiKey = encodeToken(password)
       config.baseUrl = '/api/google'
@@ -129,7 +129,7 @@ function AssistantForm(props: Props) {
     if (data) {
       if (isUndefined(data.config?.systemRole)) {
         const { lang, assistantIndexUrl } = useSettingStore.getState()
-        const assistantMarketUrl = new AssistantMarketUrl(assistantIndexUrl)
+        const assistantMarketUrl = new AssistantMarketUrl(assistantIndexUrl || ASSISTANT_INDEX_URL)
         const response = await fetch(assistantMarketUrl.getAssistantUrl(data.identifier, lang))
         const assistantDeatil: AssistantDetail = await response.json()
         form.reset({

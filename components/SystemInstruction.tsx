@@ -4,17 +4,15 @@ import { useTranslation } from 'react-i18next'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { useForm } from 'react-hook-form'
 import { z } from 'zod'
-import MarkdownIt from 'markdown-it'
-import markdownHighlight from 'markdown-it-highlightjs'
-import highlight from 'highlight.js'
-import markdownKatex from '@traptitech/markdown-it-katex'
 import { X, SquarePen, Sparkles } from 'lucide-react'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Form, FormControl, FormField, FormItem, FormMessage } from '@/components/ui/form'
 import { Textarea } from '@/components/ui/textarea'
+import Magicdown from '@/components/Magicdown'
 import Button from '@/components/Button'
 import { useMessageStore } from '@/store/chat'
 import { useSettingStore } from '@/store/setting'
+import { GEMINI_API_BASE_URL } from '@/constant/urls'
 import { encodeToken } from '@/utils/signature'
 import optimizePrompt, { type RequestProps } from '@/utils/optimizePrompt'
 import { upperFirst } from 'lodash-es'
@@ -49,77 +47,36 @@ function SystemInstruction() {
   }, [instruction, setSystemInstructionEditMode])
 
   const optimizeAssistantPrompt = useCallback(async () => {
-    if (systemInstruction === '') return false
-    const { apiKey, apiProxy, model, password } = useSettingStore.getState()
+    const { content } = form.getValues()
+    if (content === '') return false
+    const { apiKey, apiProxy, password } = useSettingStore.getState()
     const config: RequestProps = {
       apiKey,
-      model,
-      content: systemInstruction,
+      content,
     }
     if (apiKey !== '') {
-      if (apiProxy) config.baseUrl = apiProxy
+      config.baseUrl = apiProxy || GEMINI_API_BASE_URL
     } else {
       config.apiKey = encodeToken(password)
       config.baseUrl = '/api/google'
     }
     const readableStream = await optimizePrompt(config)
-    let content = ''
+    let newContent = ''
     const reader = readableStream.getReader()
     while (true) {
       const { done, value } = await reader.read()
       if (done) break
-      content += new TextDecoder().decode(value)
-      form.setValue('content', content)
+      newContent += new TextDecoder().decode(value)
+      form.setValue('content', newContent)
     }
-  }, [form, systemInstruction])
-
-  const render = useCallback((content: string) => {
-    const md: MarkdownIt = MarkdownIt({
-      linkify: true,
-      breaks: true,
-    })
-      .use(markdownHighlight)
-      .use(markdownKatex)
-
-    const mathLineRender = md.renderer.rules.math_inline!
-    md.renderer.rules.math_inline = (...params) => {
-      return `
-          <div class="katex-inline-warpper">
-            ${mathLineRender(...params)}
-          </div>
-        `
-    }
-    const mathBlockRender = md.renderer.rules.math_block!
-    md.renderer.rules.math_block = (...params) => {
-      return `
-          <div class="katex-block-warpper">
-            ${mathBlockRender(...params)}
-          </div>
-        `
-    }
-    const highlightRender = md.renderer.rules.fence!
-    md.renderer.rules.fence = (...params) => {
-      const [tokens, idx] = params
-      const token = tokens[idx]
-      const lang = token.info.trim()
-      return `
-          <div class="hljs-warpper">
-            <div class="info">
-              <span class="lang">${upperFirst(lang)}</span>
-            </div>
-            ${highlight.getLanguage(lang) ? highlightRender(...params) : null}
-          </div>
-        `
-    }
-    return md.render(content)
-  }, [])
+  }, [form])
 
   useEffect(() => {
-    setHtml(render(systemInstruction))
+    setHtml(systemInstruction)
     return () => {
       setHtml('')
     }
-  }, [systemInstruction, render])
+  }, [systemInstruction])
 
   return (
     <Card>
@@ -184,7 +141,7 @@ function SystemInstruction() {
               </form>
             </Form>
           ) : (
-            <div className="prose break-all text-sm leading-6" dangerouslySetInnerHTML={{ __html: html }}></div>
+            <Magicdown className="small">{html}</Magicdown>
           )}
         </CardContent>
       </div>

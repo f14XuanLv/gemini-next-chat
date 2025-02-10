@@ -13,6 +13,7 @@ import {
   Camera,
   Box,
   Microscope,
+  Brush,
 } from 'lucide-react'
 import { Label } from '@/components/ui/label'
 import { Checkbox } from '@/components/ui/checkbox'
@@ -21,7 +22,7 @@ import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
 import { useToast } from '@/components/ui/use-toast'
 import { usePluginStore } from '@/store/plugin'
 import { parsePlugin } from '@/utils/plugin'
-import officialPlugin, { OFFICAL_PLUGINS } from '@/constant/plugins'
+import { officialPlugins, OFFICAL_PLUGINS } from '@/plugins'
 import { keys, values, find } from 'lodash-es'
 
 const PluginMarket = dynamic(() => import('@/components/PluginMarket'))
@@ -52,15 +53,15 @@ function PluginList() {
 
   const handleUsePlugin = useCallback(
     (id: string, enabled: boolean) => {
-      const manifest = officialPlugin[id] || installed[id]
+      const manifest = officialPlugins[id] || installed[id]
       if (manifest) {
         const pluginTools = parsePlugin(id, manifest)
         if (enabled) {
           pluginTools.every((tool) => addTool(tool))
-          if (officialPlugin[id]) installPlugin(id, manifest)
+          if (officialPlugins[id]) installPlugin(id, manifest)
         } else {
           pluginTools.every((tool) => removeTool(tool.name))
-          if (officialPlugin[id]) uninstallPlugin(id)
+          if (officialPlugins[id]) uninstallPlugin(id)
         }
       } else {
         toast({
@@ -80,6 +81,22 @@ function PluginList() {
       <PopoverContent className="max-h-[330px] w-48 overflow-y-auto">
         <div>
           <h3 className="p-2 text-sm text-slate-400">{t('officialPlugins')}</h3>
+          {/* <div className="flex rounded-sm px-2 py-1 hover:bg-gray-100 dark:hover:bg-gray-900">
+            <Label
+              className="inline-flex flex-1 cursor-pointer overflow-hidden leading-6 text-slate-500"
+              htmlFor={OFFICAL_PLUGINS.IMAGEN}
+              title="Imagen3"
+            >
+              <Brush className="my-1 mr-1 h-4 w-4" />
+              <p className="truncate">Imagen3</p>
+            </Label>
+            <Checkbox
+              id={OFFICAL_PLUGINS.IMAGEN}
+              className="my-1"
+              defaultChecked={enabledTools.includes(OFFICAL_PLUGINS.IMAGEN)}
+              onCheckedChange={(checkedState) => handleUsePlugin(OFFICAL_PLUGINS.IMAGEN, checkedState === true)}
+            />
+          </div> */}
           <div className="flex rounded-sm px-2 py-1 hover:bg-gray-100 dark:hover:bg-gray-900">
             <Label
               className="inline-flex flex-1 cursor-pointer overflow-hidden leading-6 text-slate-500"

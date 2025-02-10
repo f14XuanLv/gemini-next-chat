@@ -1,10 +1,18 @@
-import type { Content } from '@google/generative-ai'
+import type { Content, GroundingMetadata } from '@google/generative-ai'
 import type { OpenAPIV3, OpenAPIV3_1 } from 'openapi-types'
 
 declare global {
   interface Message extends Content {
     id: string
     attachments?: FileInfor[]
+    groundingMetadata?: GroundingMetadata & {
+      groundingChunks: Array<{ web: { uri: string; title: string } }>
+      groundingSupports: Array<{
+        segment: { startIndex?: number; endIndex?: number; text: string }
+        groundingChunkIndices: number[]
+        confidenceScores: number[]
+      }>
+    }
   }
 
   interface Setting {
@@ -16,11 +24,9 @@ declare global {
     sttLang: string
     ttsLang: string
     ttsVoice: string
-    isProtected: boolean
     talkMode: 'chat' | 'voice'
     maxHistoryLength: number
     assistantIndexUrl: string
-    uploadProxy: string
     topP: number
     topK: number
     temperature: number
@@ -32,7 +38,7 @@ declare global {
 
   interface Assistant {
     author: string
-    createAt: string
+    createdAt: string
     homepage: string
     identifier: string
     meta: {
@@ -99,22 +105,19 @@ declare global {
     size: number
     preview?: string
     metadata?: FileMetadata
+    dataUrl?: string
     status: 'STATE_UNSPECIFIED' | 'PROCESSING' | 'ACTIVE' | 'FAILED'
-  }
-
-  interface GatewayParams<T = unknown> {
-    [name: string]: T
   }
 
   interface GatewayPayload {
     baseUrl: string
     method: 'get' | 'put' | 'post' | 'delete' | 'options' | 'head' | 'patch' | 'trace'
-    body?: GatewayParams
-    formData?: GatewayParams<string>
-    headers?: GatewayParams<string>
-    path?: GatewayParams<string>
-    query?: GatewayParams<string>
-    cookie?: GatewayParams<string>
+    body?: any
+    formData?: any
+    headers?: Record<string, string>
+    path?: Record<string, string>
+    query?: Record<string, string>
+    cookie?: Record<string, string>
   }
 
   interface Model {

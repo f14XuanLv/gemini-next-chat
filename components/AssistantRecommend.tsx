@@ -10,6 +10,7 @@ import Button from '@/components/Button'
 import { useMessageStore } from '@/store/chat'
 import { useAssistantStore } from '@/store/assistant'
 import { useSettingStore } from '@/store/setting'
+import { ASSISTANT_INDEX_URL } from '@/constant/urls'
 import AssistantMarketUrl from '@/utils/AssistantMarketUrl'
 
 function CardSkeleton() {
@@ -49,7 +50,7 @@ function AssistantRecommend() {
   const handleSelectAssistant = useCallback(
     async (identifier: string) => {
       const { instruction, clear: clearMessage } = useMessageStore.getState()
-      const assistantMarketUrl = new AssistantMarketUrl(settingStore.assistantIndexUrl)
+      const assistantMarketUrl = new AssistantMarketUrl(settingStore.assistantIndexUrl || ASSISTANT_INDEX_URL)
       const response = await fetch(assistantMarketUrl.getAssistantUrl(identifier, settingStore.lang))
       const data: AssistantDetail = await response.json()
       clearMessage()
@@ -59,9 +60,9 @@ function AssistantRecommend() {
   )
 
   return (
-    <div className="flex w-full flex-1 grow items-center justify-center overflow-y-auto scroll-smooth p-4 text-sm">
-      <section className="-mt-20 w-full max-sm:mt-0">
-        <div className="my-3 flex justify-between">
+    <div className="w-full overflow-y-auto scroll-smooth">
+      <section className="flex w-full grow flex-col items-center justify-center p-4 text-sm">
+        <div className="my-3 flex w-full justify-between">
           <h3 className="text-base font-medium">{t('assistantRecommend')}</h3>
           <div>
             <Button
@@ -86,14 +87,14 @@ function AssistantRecommend() {
           </div>
         </div>
         {recommendation.length === 0 ? (
-          <div className="grid grid-cols-2 grid-rows-2 gap-2 max-sm:grid-cols-1">
+          <div className="grid w-full grid-cols-2 grid-rows-2 gap-2 max-sm:grid-cols-1">
             <CardSkeleton />
             <CardSkeleton />
             <CardSkeleton />
             <CardSkeleton />
           </div>
         ) : (
-          <div className="grid grid-cols-2 grid-rows-2 gap-2 text-left text-gray-600 max-sm:grid-cols-1">
+          <div className="grid w-full grid-cols-2 grid-rows-2 gap-2 text-left text-gray-600 max-sm:grid-cols-1">
             {recommendation.map((assistant) => {
               return (
                 <Card

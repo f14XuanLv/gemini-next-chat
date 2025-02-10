@@ -2,7 +2,7 @@
 import dynamic from 'next/dynamic'
 import { useRef, useState, useMemo, KeyboardEvent, useEffect, useCallback, useLayoutEffect } from 'react'
 import type { FunctionCall } from '@google/generative-ai'
-import { EdgeSpeech, getRecordMineType } from '@xiangfa/polly'
+import { AudioRecorder, EdgeSpeech, getRecordMineType } from '@xiangfa/polly'
 import SiriWave from 'siriwave'
 import {
   MessageCircleHeart,
@@ -21,26 +21,31 @@ import { useTranslation } from 'react-i18next'
 import ThemeToggle from '@/components/ThemeToggle'
 import { useSidebar } from '@/components/ui/sidebar'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
+import { ToastAction } from '@/components/ui/toast'
+import { useToast } from '@/components/ui/use-toast'
 import SystemInstruction from '@/components/SystemInstruction'
 import AttachmentArea from '@/components/AttachmentArea'
 import Button from '@/components/Button'
 import { useMessageStore } from '@/store/chat'
 import { useAttachmentStore } from '@/store/attachment'
-import { useSettingStore } from '@/store/setting'
+import { useSettingStore, useEnvStore } from '@/store/setting'
 import { usePluginStore } from '@/store/plugin'
-import i18n from '@/plugins/i18n'
+import { pluginHandle } from '@/plugins'
+import i18n from '@/utils/i18n'
 import chat, { type RequestProps } from '@/utils/chat'
 import { summarizePrompt, getVoiceModelPrompt, getSummaryPrompt, getTalkAudioPrompt } from '@/utils/prompt'
-import { AudioRecorder } from '@/utils/Recorder'
 import AudioStream from '@/utils/AudioStream'
 import PromiseQueue from '@/utils/PromiseQueue'
-import textStream, { streamToText } from '@/utils/textStream'
+import { textStream, simpleTextStream } from '@/utils/textStream'
 import { encodeToken } from '@/utils/signature'
 import type { FileManagerOptions } from '@/utils/FileManager'
 import { fileUpload, imageUpload } from '@/utils/upload'
+import { parseOffice, isOfficeFile } from '@/utils/officeParser'
 import { findOperationById } from '@/utils/plugin'
+import { generateImages, type ImageGenerationRequest } from '@/utils/generateImages'
 import { detectLanguage, formatTime, readFileAsDataURL } from '@/utils/common'
 import { cn } from '@/utils'
+import { GEMINI_API_BASE_URL } from '@/constant/urls'
 import { OldVisionModel, OldTextModel } from '@/constant/model'
 import mimeType from '@/constant/attachment'
 import { customAlphabet } from 'nanoid'
@@ -50,12 +55,15 @@ import { type OpenAPIV3_1 } from 'openapi-types'
 interface AnswerParams {
   messages: Message[]
   model: string
-  onResponse: (readableStream: ReadableStream) => void
+  onResponse: (
+    readableStream: ReadableStream,
+    thoughtReadableStream: ReadableStream,
+    groundingSearchReadable: ReadableStream,
+  ) => void
   onFunctionCall?: (functionCalls: FunctionCall[]) => void
   onError?: (error: string, code?: number) => void
 }
 
-const BUILD_MODE = process.env.NEXT_PUBLIC_BUILD_MODE as string
 const TEXTAREA_DEFAULT_HEIGHT = 30
 const nanoid = customAlphabet('1234567890abcdefghijklmnopqrstuvwxyz', 12)
 
@@ -68,6 +76,7 @@ const PluginList = dynamic(() => import('@/components/PluginList'))
 
 export default function Home() {
   const { t } = useTranslation()
+  const { toast } = useToast()
   const { state: sidebarState, toggleSidebar } = useSidebar()
   const siriWaveRef = useRef<HTMLDivElement>(null)
   const scrollAreaBottomRef = useRef<HTMLDivElement>(null)
@@ -89,6 +98,7 @@ export default function Home() {
   const [siriWave, setSiriWave] = useState<SiriWave>()
   const [content, setContent] = useState<string>('')
   const [message, setMessage] = useState<string>('')
+  const [thinkingMessage, setThinkingMessage] = useState<string>('')
   const [subtitle, setSubtitle] = useState<string>('')
   const [errorMessage, setErrorMessage] = useState<string>('')
   const [recordTime, setRecordTime] = useState<number>(0)
@@ -111,6 +121,9 @@ export default function Home() {
   }, [status, t])
   const isOldVisionModel = useMemo(() => {
     return OldVisionModel.includes(model)
+  }, [model])
+  const isThinkingModel = useMemo(() => {
+    return model.includes('-thinking')
   }, [model])
   const supportAttachment = useMemo(() => {
     return !OldTextModel.includes(model)
@@ -174,6 +187,7 @@ export default function Home() {
       const { tools } = usePluginStore.getState()
       const generationConfig: RequestProps['generationConfig'] = { topP, topK, temperature, maxOutputTokens }
       setErrorMessage('')
+      setIsThinking(true)
       const config: RequestProps = {
         messages,
         apiKey,
@@ -182,56 +196,119 @@ export default function Home() {
         safety,
       }
       if (systemInstruction) config.systemInstruction = systemInstruction
-      if (tools.length > 0) config.tools = [{ functionDeclarations: tools }]
+      if (talkMode === 'voice') {
+        config.systemInstruction = `${getVoiceModelPrompt()}\n\n${systemInstruction}`
+      }
+      if (tools.length > 0 && !isThinkingModel) config.tools = [{ functionDeclarations: tools }]
       if (apiKey !== '') {
-        if (apiProxy) config.baseUrl = apiProxy
+        config.baseUrl = apiProxy || GEMINI_API_BASE_URL
       } else {
         config.apiKey = encodeToken(password)
         config.baseUrl = '/api/google'
       }
       try {
         const stream = await chat(config)
-        const readableStream = new ReadableStream({
-          async start(controller) {
-            const encoder = new TextEncoder()
-            const functionCalls: FunctionCall[][] = []
-            for await (const chunk of stream) {
-              if (stopGeneratingRef.current) return controller.close()
-              const calls = chunk.functionCalls()
-              if (calls) {
-                functionCalls.push(calls)
-              } else {
-                const text = chunk.text()
-                const encoded = encoder.encode(text)
-                controller.enqueue(encoded)
-              }
-            }
-            controller.close()
-            if (isFunction(onFunctionCall)) {
-              onFunctionCall(flatten(functionCalls))
-            }
+        let thinking = false
+        if (isThinkingModel) thinking = true
+
+        const encoder = new TextEncoder()
+        const { readable, writable } = new TransformStream({
+          transform(chunk, controller) {
+            controller.enqueue(encoder.encode(chunk))
           },
         })
-        onResponse(readableStream)
+        const { readable: thoughtReadable, writable: thoughtWritable } = new TransformStream({
+          transform(chunk, controller) {
+            controller.enqueue(encoder.encode(chunk))
+          },
+        })
+        const { readable: groundingSearchReadable, writable: groundingSearchWritable } = new TransformStream({
+          transform(chunk, controller) {
+            controller.enqueue(encoder.encode(chunk))
+          },
+        })
+        const writer = writable.getWriter()
+        const thoughtWriter = thoughtWritable.getWriter()
+        const groundingSearchWriter = groundingSearchWritable.getWriter()
+        onResponse(readable, thoughtReadable, groundingSearchReadable)
+
+        const functionCalls: FunctionCall[][] = []
+
+        for await (const chunk of stream) {
+          if (stopGeneratingRef.current) return
+
+          if (chunk.candidates) {
+            const candidates: any[] = chunk.candidates
+            candidates.forEach((item) => {
+              if (item.content.parts) {
+                if (thinking) {
+                  const textParts = item.content.parts.filter((item: any) => !isUndefined(item.text))
+                  if (textParts.length === 2) {
+                    if (textParts[0].text) {
+                      thoughtWriter.write(textParts[0].text)
+                    }
+                    if (textParts[1].text) {
+                      thinking = false
+                      writer.write(textParts[1].text)
+                    }
+                  } else {
+                    for (const textPart of textParts) {
+                      if (textPart.thought) {
+                        thoughtWriter.write(textPart.text)
+                      } else {
+                        thinking = false
+                        writer.write(textPart.text)
+                      }
+                    }
+                  }
+                } else {
+                  const text = chunk.text()
+                  if (thinking) {
+                    thoughtWriter.write(text)
+                  } else {
+                    writer.write(text)
+                  }
+                }
+              } else if (item.finishMessage) {
+                if (isFunction(onError)) onError(item.finishMessage)
+              }
+              if (item.groundingMetadata) {
+                groundingSearchWriter.write(JSON.stringify(item.groundingMetadata))
+              }
+            })
+          }
+
+          const calls = chunk.functionCalls()
+          if (calls) functionCalls.push(calls)
+        }
+
+        writer.close()
+        thoughtWriter.close()
+
+        if (isFunction(onFunctionCall)) {
+          onFunctionCall(flatten(functionCalls))
+        }
       } catch (error) {
         if (error instanceof Error && isFunction(onError)) {
           onError(error.message)
+          setIsThinking(false)
         }
       }
     },
-    [systemInstruction],
+    [systemInstruction, isThinkingModel, talkMode],
   )
 
   const summarize = useCallback(
     async (messages: Message[]) => {
       const { summary, summarize: summarizeChat } = useMessageStore.getState()
       const { ids, prompt } = summarizePrompt(messages, summary.ids, summary.content)
+      let content = ''
       await fetchAnswer({
         messages: [{ id: 'summary', role: 'user', parts: [{ text: prompt }] }],
         model,
-        onResponse: async (readableStream) => {
-          const text = await streamToText(readableStream)
-          summarizeChat(ids, text.trim())
+        onResponse: async (text) => {
+          content += text
+          summarizeChat(ids, content.trim())
         },
       })
     },
@@ -250,41 +327,48 @@ export default function Home() {
   }, [])
 
   const handleResponse = useCallback(
-    async (data: ReadableStream) => {
+    (
+      readableStream: ReadableStream,
+      thoughtReadableStream: ReadableStream,
+      groundingSearchReadableStream: ReadableStream,
+    ) => {
       const { lang, talkMode, maxHistoryLength } = useSettingStore.getState()
       const { summary, add: addMessage } = useMessageStore.getState()
       speechQueue.current = new PromiseQueue()
       setSpeechSilence(false)
-      setIsThinking(true)
       let text = ''
-      await textStream({
-        readable: data,
+      let thoughtText = ''
+      let groundingSearch: Message['groundingMetadata']
+      textStream({
+        readable: readableStream,
         locale: lang,
         onMessage: (content) => {
           text += content
           setMessage(text)
-          scrollToBottom()
         },
         onStatement: (statement) => {
           if (talkMode === 'voice') {
-            // Remove list symbols and adjust layout
-            const audioText = statement.replaceAll('*', '').replaceAll('\n\n', '\n')
-            speech(audioText)
+            speech(statement)
           }
         },
         onFinish: async () => {
           if (talkMode === 'voice') {
             setStatus('silence')
           }
-          if (text !== '') {
-            addMessage({
-              id: nanoid(),
-              role: 'model',
-              parts: [{ text }],
-            })
-            setMessage('')
-            scrollToBottom()
+          const message: Message = {
+            id: nanoid(),
+            role: 'model',
+            parts: [],
           }
+          if (text !== '') {
+            message.parts = thoughtText !== '' ? [{ text: thoughtText }, { text }] : [{ text }]
+          } else if (thoughtText !== '') {
+            message.parts = [{ text: thoughtText }]
+          }
+          if (groundingSearch) message.groundingMetadata = groundingSearch
+          addMessage(message)
+          setMessage('')
+          setThinkingMessage('')
           setIsThinking(false)
           stopGeneratingRef.current = false
           setExecutingPlugins([])
@@ -302,13 +386,26 @@ export default function Home() {
           }
         },
       })
+      simpleTextStream({
+        readable: thoughtReadableStream,
+        onMessage: (content) => {
+          thoughtText += content
+          setThinkingMessage(thoughtText)
+        },
+      })
+      simpleTextStream({
+        readable: groundingSearchReadableStream,
+        onMessage: (content) => {
+          groundingSearch = JSON.parse(content)
+        },
+      })
     },
-    [scrollToBottom, speech, summarize],
+    [speech, summarize, setThinkingMessage],
   )
 
   const handleFunctionCall = useCallback(
     async (functionCalls: FunctionCall[]) => {
-      const { model } = useSettingStore.getState()
+      const { apiKey, apiProxy, password, model } = useSettingStore.getState()
       const { add: addMessage } = useMessageStore.getState()
       const { installed } = usePluginStore.getState()
       const pluginExecuteResults: Record<string, unknown> = {}
@@ -334,8 +431,6 @@ export default function Home() {
           ],
         }
         addMessage(functionCallMessage)
-        const { password } = useSettingStore.getState()
-        const token = encodeToken(password)
         const payload: GatewayPayload = {
           baseUrl: `${baseUrl}${operation.path}`,
           method: operation.method as GatewayPayload['method'],
@@ -374,20 +469,50 @@ export default function Home() {
         if (!isEmpty(headers)) payload.headers = headers
         if (!isEmpty(path)) payload.path = path
         if (!isEmpty(query)) payload.query = query
-        if (!isEmpty(cookie)) payload.cookie = cookie
+        // if (!isEmpty(cookie)) payload.cookie = cookie
         try {
-          const apiResponse = await fetch(
-            baseUrl.startsWith('/api/plugin') ? `${payload.baseUrl}?token=${token}` : `/api/gateway?token=${token}`,
-            {
-              method: 'POST',
-              body: JSON.stringify(payload),
-            },
-          )
-          const result = await apiResponse.json()
-          if (apiResponse.status !== 200) {
-            throw new Error(result?.message || apiResponse.statusText)
+          if (baseUrl.startsWith('@plugins/')) {
+            if (pluginId === 'OfficialImagen') {
+              if (payload.query) {
+                const options =
+                  apiKey !== ''
+                    ? { apiKey, baseUrl: apiProxy || GEMINI_API_BASE_URL }
+                    : { token: encodeToken(password), baseUrl: '/api/google' }
+                const result = await generateImages({
+                  ...options,
+                  model: 'imagen-3.0-generate-002',
+                  params: payload.query as unknown as ImageGenerationRequest,
+                })
+                pluginExecuteResults[call.name] = result
+              }
+            } else {
+              const result = await pluginHandle(pluginId, payload)
+              pluginExecuteResults[call.name] = result
+            }
+          } else {
+            let url = payload.baseUrl
+            const options: RequestInit = {
+              method: payload.method,
+            }
+            if (payload.query) {
+              const searchParams = new URLSearchParams(payload.query)
+              url += `?${searchParams.toString()}`
+            }
+            if (payload.path) {
+              for (const key in payload.path) {
+                url.replaceAll(`{${key}}`, payload.path[key])
+              }
+            }
+            if (payload.headers) options.headers = payload.headers
+            if (payload.body) options.body = payload.body
+            if (payload.formData) options.body = payload.formData
+            const apiResponse = await fetch(url, options)
+            const result = await apiResponse.json()
+            if (apiResponse.status !== 200) {
+              throw new Error(result?.message || apiResponse.statusText)
+            }
+            pluginExecuteResults[call.name] = result
           }
-          pluginExecuteResults[call.name] = result
           const executingPluginsStatus = executingPlugins.filter((name) => name !== call.name)
           setExecutingPlugins([...executingPluginsStatus])
         } catch (err) {
@@ -422,9 +547,7 @@ export default function Home() {
         await fetchAnswer({
           messages: [...messagesRef.current],
           model,
-          onResponse: (stream) => {
-            handleResponse(stream)
-          },
+          onResponse: handleResponse,
           onError: (message, code) => {
             handleError(message, code)
           },
@@ -434,10 +557,21 @@ export default function Home() {
     [fetchAnswer, handleResponse, handleError, executingPlugins],
   )
 
+  // const handleGroundingSearch = useCallback((groundingMetadata: GroundingMetadata) => {
+  //   const { messages, update: updateMessage } = useMessageStore.getState()
+  //   const currentModelMessageIndex = findLastIndex(messages, { role: 'model' })
+  //   console.log(currentModelMessageIndex)
+  //   if (currentModelMessageIndex > -1) {
+  //     const currentModelMessage = messages[currentModelMessageIndex]
+  //     updateMessage(currentModelMessage.id, { ...currentModelMessage, groundingMetadata })
+  //   }
+  // }, [])
+
   const checkAccessStatus = useCallback(() => {
-    const { isProtected, password, apiKey } = useSettingStore.getState()
+    const { password, apiKey } = useSettingStore.getState()
+    const { isProtected, buildMode } = useEnvStore.getState()
     const isProtectedMode = isProtected && password === '' && apiKey === ''
-    const isStaticMode = BUILD_MODE === 'export' && apiKey === ''
+    const isStaticMode = buildMode === 'export' && apiKey === ''
     if (isProtectedMode || isStaticMode) {
       setSetingOpen(true)
       return false
@@ -458,11 +592,11 @@ export default function Home() {
       if (files.length > 0) {
         for (const file of files) {
           if (isOldVisionModel) {
-            if (file.preview) {
+            if (file.dataUrl) {
               messagePart.push({
                 inlineData: {
                   mimeType: file.mimeType,
-                  data: file.preview.split(';base64,')[1],
+                  data: file.dataUrl.split(';base64,')[1],
                 },
               })
             }
@@ -472,6 +606,13 @@ export default function Home() {
                 fileData: {
                   mimeType: file.metadata.mimeType,
                   fileUri: file.metadata.uri,
+                },
+              })
+            } else if (file.dataUrl) {
+              messagePart.push({
+                inlineData: {
+                  mimeType: file.mimeType,
+                  data: file.dataUrl.split(';base64,')[1],
                 },
               })
             }
@@ -504,7 +645,6 @@ export default function Home() {
         messages = getTalkAudioPrompt(messages)
       }
       if (talkMode === 'voice') {
-        messages = getVoiceModelPrompt(messages)
         setStatus('thinkng')
         setSubtitle('')
       }
@@ -515,21 +655,16 @@ export default function Home() {
       setContent('')
       clearAttachment()
       setTextareaHeight(TEXTAREA_DEFAULT_HEIGHT)
+      scrollToBottom()
       await fetchAnswer({
         messages,
         model,
-        onResponse: (stream) => {
-          handleResponse(stream)
-        },
-        onFunctionCall: (functionCalls) => {
-          handleFunctionCall(functionCalls)
-        },
-        onError: (message, code) => {
-          handleError(message, code)
-        },
+        onResponse: handleResponse,
+        onFunctionCall: handleFunctionCall,
+        onError: handleError,
       })
     },
-    [isOldVisionModel, fetchAnswer, handleResponse, handleFunctionCall, handleError, checkAccessStatus],
+    [isOldVisionModel, fetchAnswer, handleResponse, handleFunctionCall, handleError, checkAccessStatus, scrollToBottom],
   )
 
   const handleResubmit = useCallback(
@@ -548,28 +683,33 @@ export default function Home() {
           }
         }
       }
+      scrollToBottom()
       await fetchAnswer({
         messages: [...messagesRef.current],
         model,
-        onResponse: (stream) => {
-          handleResponse(stream)
-        },
-        onFunctionCall: (functionCalls) => {
-          handleFunctionCall(functionCalls)
-        },
-        onError: (message, code) => {
-          handleError(message, code)
-        },
+        onResponse: handleResponse,
+        onFunctionCall: handleFunctionCall,
+        onError: handleError,
       })
     },
-    [fetchAnswer, handleResponse, handleFunctionCall, handleError, checkAccessStatus],
+    [fetchAnswer, handleResponse, handleFunctionCall, handleError, checkAccessStatus, scrollToBottom],
   )
 
   const handleCleanMessage = useCallback(() => {
-    const { clear: clearMessage } = useMessageStore.getState()
+    const { clear: clearMessage, backup, restore } = useMessageStore.getState()
+    const conversation = backup()
     clearMessage()
     setErrorMessage('')
-  }, [])
+    toast({
+      title: t('chatContentCleared'),
+      action: (
+        <ToastAction altText="Undo" onClick={() => restore(conversation)}>
+          {t('undo')}
+        </ToastAction>
+      ),
+      duration: 3600,
+    })
+  }, [toast, t])
 
   const updateTalkMode = useCallback((type: 'chat' | 'voice') => {
     const { update } = useSettingStore.getState()
@@ -635,9 +775,17 @@ export default function Home() {
       const fileList: File[] = []
 
       if (files) {
+        const fileList: File[] = []
         for (let i = 0; i < files.length; i++) {
           const file = files[i]
           if (mimeType.includes(file.type)) {
+            if (isOfficeFile(file.type)) {
+              const newFile = await parseOffice(file, { type: 'file' })
+              if (newFile instanceof File) fileList.push(newFile)
+            } else {
+              fileList.push(file)
+            }
+          } else if (file.type.startsWith('text/')) {
             fileList.push(file)
           }
         }
@@ -646,13 +794,18 @@ export default function Home() {
         if (isOldVisionModel) {
           await imageUpload({ files: fileList, addAttachment, updateAttachment })
         } else {
-          const { apiKey, apiProxy, uploadProxy, password } = useSettingStore.getState()
+          const { apiKey, apiProxy, password } = useSettingStore.getState()
+          const { uploadLimit } = useEnvStore.getState()
           const options: FileManagerOptions =
-            apiKey !== ''
-              ? { apiKey, baseUrl: apiProxy, uploadUrl: uploadProxy }
-              : { token: encodeToken(password), uploadUrl: uploadProxy }
+            apiKey !== '' ? { apiKey, baseUrl: apiProxy || GEMINI_API_BASE_URL } : { token: encodeToken(password) }
 
-          await fileUpload({ files: fileList, fileManagerOptions: options, addAttachment, updateAttachment })
+          await fileUpload({
+            files: fileList,
+            uploadLimit,
+            fileManagerOptions: options,
+            addAttachment,
+            updateAttachment,
+          })
         }
       }
     },
@@ -673,6 +826,11 @@ export default function Home() {
     },
     [handleFileUpload],
   )
+
+  const handleStopGenerate = useCallback(() => {
+    stopGeneratingRef.current = true
+    setIsThinking(false)
+  }, [])
 
   const genPluginStatusPart = useCallback((plugins: string[]) => {
     const parts = []
@@ -724,9 +882,8 @@ export default function Home() {
   }, [])
 
   useEffect(() => {
-    const { talkMode } = useSettingStore.getState()
     let instance: SiriWave
-    if (talkMode === 'chat') {
+    if (talkMode === 'voice') {
       instance = new SiriWave({
         container: siriWaveRef.current!,
         style: 'ios9',
@@ -736,20 +893,23 @@ export default function Home() {
         height: window.innerHeight / 5,
       })
       setSiriWave(instance)
+      setStatus('silence')
     }
 
     return () => {
-      if (talkMode === 'chat' && instance) {
+      if (talkMode === 'voice' && instance) {
         instance.dispose()
       }
     }
-  }, [])
+  }, [talkMode])
 
   useEffect(() => {
-    if (isOldVisionModel || BUILD_MODE === 'export' || '__TAURI__' in window) {
+    if (isOldVisionModel || isThinkingModel) {
       setEnablePlugin(false)
+    } else {
+      setEnablePlugin(true)
     }
-  }, [isOldVisionModel])
+  }, [isOldVisionModel, isThinkingModel])
 
   useLayoutEffect(() => {
     const setting = useSettingStore.getState()
@@ -773,8 +933,8 @@ export default function Home() {
   }, [])
 
   return (
-    <main className="mx-auto flex h-screen w-full max-w-screen-md flex-col justify-between overflow-hidden max-sm:pt-0 landscape:max-md:pt-0">
-      <div className="flex justify-between px-4 pb-2 pr-2 pt-10 max-sm:pr-2 max-sm:pt-6 landscape:max-md:pt-4">
+    <main className="mx-auto flex h-screen max-h-[-webkit-fill-available] w-full max-w-screen-md flex-col justify-between overflow-hidden">
+      <div className="flex justify-between px-4 pb-2 pr-2 pt-10 max-md:pt-4 max-sm:pr-2 max-sm:pt-4">
         <div className="flex flex-row text-xl leading-8 text-red-400 max-sm:text-base">
           <MessageCircleHeart className="h-10 w-10 max-sm:h-8 max-sm:w-8" />
           <div className="ml-2 font-bold leading-10 max-sm:ml-1 max-sm:leading-8">Gemini Next Chat</div>
@@ -820,7 +980,7 @@ export default function Home() {
               <div
                 className={cn(
                   'group text-slate-500 transition-colors last:text-slate-800 hover:text-slate-800 dark:last:text-slate-400 dark:hover:text-slate-400 max-sm:hover:bg-transparent',
-                  msg.role === 'model' && msg.parts && msg.parts[0].functionCall ? 'hidden' : '',
+                  msg.role === 'model' && msg.parts && msg.parts[0]?.functionCall ? 'hidden' : '',
                 )}
                 key={msg.id}
               >
@@ -834,17 +994,23 @@ export default function Home() {
                 </div>
               </div>
             ))}
-            {isThinking ? (
-              <div className="group text-slate-500 transition-colors last:text-slate-800 hover:text-slate-800 dark:last:text-slate-400 dark:hover:text-slate-400 max-sm:hover:bg-transparent">
-                <div className="flex gap-3 p-4 pb-1 hover:bg-gray-50/80 dark:hover:bg-gray-900/80">
-                  <MessageItem id="message" role="model" parts={[{ text: message }]} />
-                </div>
-              </div>
-            ) : null}
             {executingPlugins.length > 0 ? (
               <div className="group text-slate-500 transition-colors last:text-slate-800 hover:text-slate-800 dark:last:text-slate-400 dark:hover:text-slate-400 max-sm:hover:bg-transparent">
                 <div className="flex gap-3 p-4 hover:bg-gray-50/80 dark:hover:bg-gray-900/80">
                   <MessageItem id="message" role="function" parts={genPluginStatusPart(executingPlugins)} />
+                </div>
+              </div>
+            ) : null}
+            {isThinking ? (
+              <div className="group text-slate-500 transition-colors last:text-slate-800 hover:text-slate-800 dark:last:text-slate-400 dark:hover:text-slate-400 max-sm:hover:bg-transparent">
+                <div className="flex gap-3 p-4 pb-1 hover:bg-gray-50/80 dark:hover:bg-gray-900/80">
+                  <MessageItem
+                    id="message"
+                    role="model"
+                    parts={
+                      thinkingMessage !== '' ? [{ text: thinkingMessage }, { text: message }] : [{ text: message }]
+                    }
+                  />
                 </div>
               </div>
             ) : null}
@@ -885,103 +1051,106 @@ export default function Home() {
           </div>
         </div>
       )}
-      <div className="flex w-full max-w-screen-md items-end gap-2 bg-background px-4 pb-8 pt-2 max-sm:p-2 max-sm:pb-3 landscape:max-md:pb-4">
-        {enablePlugin ? <PluginList /> : null}
-        <div
-          className="relative box-border flex w-full flex-1 flex-col rounded-md border border-input bg-[hsl(var(--background))] py-1 max-sm:py-0"
-          onPaste={handlePaste}
-          onDrop={handleDrop}
-          onDragOver={(ev) => ev.preventDefault()}
-        >
-          <div className="p-2 pb-0 pt-1 empty:p-0 max-sm:pt-2">
-            <AttachmentArea className="max-h-32 w-full overflow-y-auto border-b border-dashed pb-2" />
-          </div>
-          <textarea
-            autoFocus
-            className={cn(
-              'max-h-[120px] w-full resize-none border-none bg-transparent px-2 pt-1 text-sm leading-6 transition-[height] focus-visible:outline-none',
-              !supportSpeechRecognition ? 'pr-8' : 'pr-16',
-            )}
-            style={{ height: `${textareaHeight}px` }}
-            value={content}
-            placeholder={t('askAQuestion')}
-            onChange={(ev) => {
-              setContent(ev.target.value)
-              setTextareaHeight(ev.target.value === '' ? TEXTAREA_DEFAULT_HEIGHT : ev.target.scrollHeight)
-            }}
-            onKeyDown={handleKeyDown}
-          />
-          <div className="absolute bottom-0.5 right-1 flex max-sm:bottom-0">
-            {supportAttachment ? (
-              <TooltipProvider>
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <div className="box-border flex h-8 w-8 cursor-pointer items-center justify-center rounded-full p-1.5 text-slate-800 hover:bg-secondary/80 dark:text-slate-600 max-sm:h-7 max-sm:w-7">
-                      <FileUploader beforeUpload={() => checkAccessStatus()} />
-                    </div>
-                  </TooltipTrigger>
-                  <TooltipContent className="mb-1 max-w-36">
-                    {isOldVisionModel ? t('imageUploadTooltip') : t('uploadTooltip')}
-                  </TooltipContent>
-                </Tooltip>
-              </TooltipProvider>
-            ) : null}
-            {supportSpeechRecognition ? (
-              <TooltipProvider>
-                <Tooltip open={isRecording}>
-                  <TooltipTrigger asChild>
-                    <div
-                      className="box-border flex h-8 w-8 cursor-pointer items-center justify-center rounded-full p-1.5 text-slate-800 hover:bg-secondary/80 dark:text-slate-600 max-sm:h-7 max-sm:w-7"
-                      onClick={() => handleRecorder()}
+      <div className="max-w-screen-md bg-background px-4 pb-8 pt-2 max-md:pb-4 max-sm:p-2 max-sm:pb-3">
+        <div className="flex w-full items-end gap-2 max-sm:pb-[calc(var(--safe-area-inset-bottom)-16px)]">
+          {enablePlugin ? <PluginList /> : null}
+          <div
+            className="relative box-border flex w-full flex-1 flex-col rounded-md border border-input bg-[hsl(var(--background))] py-1 max-sm:py-0"
+            onPaste={handlePaste}
+            onDrop={handleDrop}
+            onDragOver={(ev) => ev.preventDefault()}
+          >
+            <div className="p-2 pb-0 pt-1 empty:p-0 max-sm:pt-2">
+              <AttachmentArea className="max-h-32 w-full overflow-y-auto border-b border-dashed pb-2" />
+            </div>
+            <textarea
+              autoFocus
+              className={cn(
+                'max-h-[120px] w-full resize-none border-none bg-transparent px-2 pt-1 text-sm leading-6 transition-[height] focus-visible:outline-none',
+                !supportSpeechRecognition ? 'pr-8' : 'pr-16',
+              )}
+              style={{ height: `${textareaHeight}px` }}
+              value={content}
+              placeholder={t('askAQuestion')}
+              onChange={(ev) => {
+                setContent(ev.target.value)
+                setTextareaHeight(ev.target.value === '' ? TEXTAREA_DEFAULT_HEIGHT : ev.target.scrollHeight)
+                if (messages.length > 1) scrollToBottom()
+              }}
+              onKeyDown={handleKeyDown}
+            />
+            <div className="absolute bottom-0.5 right-1 flex max-sm:bottom-0">
+              {supportAttachment ? (
+                <TooltipProvider>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <div className="box-border flex h-8 w-8 cursor-pointer items-center justify-center rounded-full p-1.5 text-slate-800 hover:bg-secondary/80 dark:text-slate-600 max-sm:h-7 max-sm:w-7">
+                        <FileUploader beforeUpload={() => checkAccessStatus()} />
+                      </div>
+                    </TooltipTrigger>
+                    <TooltipContent className="mb-1 max-w-36">
+                      {isOldVisionModel ? t('imageUploadTooltip') : t('uploadTooltip')}
+                    </TooltipContent>
+                  </Tooltip>
+                </TooltipProvider>
+              ) : null}
+              {supportSpeechRecognition ? (
+                <TooltipProvider>
+                  <Tooltip open={isRecording}>
+                    <TooltipTrigger asChild>
+                      <div
+                        className="box-border flex h-8 w-8 cursor-pointer items-center justify-center rounded-full p-1.5 text-slate-800 hover:bg-secondary/80 dark:text-slate-600 max-sm:h-7 max-sm:w-7"
+                        onClick={() => handleRecorder()}
+                      >
+                        <Mic className={isRecording ? 'animate-pulse' : ''} />
+                      </div>
+                    </TooltipTrigger>
+                    <TooltipContent
+                      className={cn(
+                        'mb-1 px-2 py-1 text-center',
+                        isUndefined(audioRecordRef.current?.isRecording) ? '' : 'font-mono text-red-500',
+                      )}
                     >
-                      <Mic className={isRecording ? 'animate-pulse' : ''} />
-                    </div>
-                  </TooltipTrigger>
-                  <TooltipContent
-                    className={cn(
-                      'mb-1 px-2 py-1 text-center',
-                      isUndefined(audioRecordRef.current?.isRecording) ? '' : 'font-mono text-red-500',
-                    )}
-                  >
-                    {isUndefined(audioRecordRef.current?.isRecording) ? t('startRecording') : formatTime(recordTime)}
-                  </TooltipContent>
-                </Tooltip>
-              </TooltipProvider>
-            ) : null}
+                      {isUndefined(audioRecordRef.current?.isRecording) ? t('startRecording') : formatTime(recordTime)}
+                    </TooltipContent>
+                  </Tooltip>
+                </TooltipProvider>
+              ) : null}
+            </div>
           </div>
+          {isThinking ? (
+            <Button
+              className="rounded-full max-sm:h-8 max-sm:w-8 [&_svg]:size-4 max-sm:[&_svg]:size-3"
+              title={t('stop')}
+              variant="secondary"
+              size="icon"
+              onClick={() => handleStopGenerate()}
+            >
+              <Square />
+            </Button>
+          ) : content === '' && files.length === 0 && supportSpeechRecognition ? (
+            <Button
+              className="max-sm:h-8 max-sm:w-8 [&_svg]:size-5 max-sm:[&_svg]:size-4"
+              title={t('voiceMode')}
+              variant="secondary"
+              size="icon"
+              onClick={() => updateTalkMode('voice')}
+            >
+              <AudioLines />
+            </Button>
+          ) : (
+            <Button
+              className="max-sm:h-8 max-sm:w-8 [&_svg]:size-5 max-sm:[&_svg]:size-4"
+              title={t('send')}
+              variant="secondary"
+              size="icon"
+              disabled={isRecording || isUploading}
+              onClick={() => handleSubmit(content)}
+            >
+              <SendHorizontal />
+            </Button>
+          )}
         </div>
-        {isThinking ? (
-          <Button
-            className="rounded-full max-sm:h-8 max-sm:w-8 [&_svg]:size-4 max-sm:[&_svg]:size-3"
-            title={t('stop')}
-            variant="secondary"
-            size="icon"
-            onClick={() => (stopGeneratingRef.current = true)}
-          >
-            <Square />
-          </Button>
-        ) : content === '' && files.length === 0 && supportSpeechRecognition ? (
-          <Button
-            className="max-sm:h-8 max-sm:w-8 [&_svg]:size-5 max-sm:[&_svg]:size-4"
-            title={t('voiceMode')}
-            variant="secondary"
-            size="icon"
-            onClick={() => updateTalkMode('voice')}
-          >
-            <AudioLines />
-          </Button>
-        ) : (
-          <Button
-            className="max-sm:h-8 max-sm:w-8 [&_svg]:size-5 max-sm:[&_svg]:size-4"
-            title={t('send')}
-            variant="secondary"
-            size="icon"
-            disabled={isRecording || isUploading}
-            onClick={() => handleSubmit(content)}
-          >
-            <SendHorizontal />
-          </Button>
-        )}
       </div>
       <div style={{ display: talkMode === 'voice' ? 'block' : 'none' }}>
         <div className="fixed left-0 right-0 top-0 z-50 flex h-full w-screen flex-col items-center justify-center bg-slate-900">

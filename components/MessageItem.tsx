@@ -1,18 +1,13 @@
 'use client'
-import { useEffect, useState, useCallback, useMemo, memo } from 'react'
+import dynamic from 'next/dynamic'
+import { useEffect, useState, useCallback, useRef, useMemo, memo } from 'react'
 import { useTranslation } from 'react-i18next'
 import Lightbox from 'yet-another-react-lightbox'
 import LightboxFullscreen from 'yet-another-react-lightbox/plugins/fullscreen'
-import MarkdownIt from 'markdown-it'
-import markdownHighlight from 'markdown-it-highlightjs'
-import highlight from 'highlight.js'
-import markdownKatex from '@traptitech/markdown-it-katex'
-import Clipboard from 'clipboard'
 import {
   User,
   Bot,
   RotateCw,
-  Sparkles,
   Copy,
   CopyCheck,
   PencilLine,
@@ -24,54 +19,37 @@ import {
   Blocks,
 } from 'lucide-react'
 import { EdgeSpeech } from '@xiangfa/polly'
-import type { SearchResult } from 'duck-duck-scrape'
+import copy from 'copy-to-clipboard'
+import { convert } from 'html-to-text'
 import { Avatar, AvatarFallback } from '@/components/ui/avatar'
+import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from '@/components/ui/accordion'
 import BubblesLoading from '@/components/BubblesLoading'
 import FileList from '@/components/FileList'
 import EditableArea from '@/components/EditableArea'
 import AudioPlayer from '@/components/AudioPlayer'
 import IconButton from '@/components/IconButton'
 import Button from '@/components/Button'
-import WebSearch from '@/components/plugins/WebSearch'
 import Weather, { type WeatherResult } from '@/components/plugins/Weather'
 import Unsplash from '@/components/plugins/Unsplash'
 import Arxiv from '@/components/plugins/Arxiv'
+import Imagen from '@/components/plugins/Imagen'
 import { useMessageStore } from '@/store/chat'
 import { useSettingStore } from '@/store/setting'
 import { usePluginStore } from '@/store/plugin'
 import AudioStream from '@/utils/AudioStream'
 import { sentenceSegmentation } from '@/utils/common'
+import type { ImageGenerationResponse } from '@/utils/generateImages'
 import { cn } from '@/utils'
-import { OFFICAL_PLUGINS } from '@/constant/plugins'
-import { upperFirst, isFunction, find } from 'lodash-es'
+import { OFFICAL_PLUGINS } from '@/plugins'
+import { isFunction, find, findLastIndex, isUndefined } from 'lodash-es'
 
 import 'katex/dist/katex.min.css'
-import 'highlight.js/styles/a11y-light.css'
 import 'yet-another-react-lightbox/styles.css'
+
+const Magicdown = dynamic(() => import('@/components/Magicdown'))
 
 interface Props extends Message {
   onRegenerate?: (id: string) => void
-}
-
-const registerCopy = (className: string) => {
-  const clipboard = new Clipboard(className, {
-    text: (trigger) => {
-      return decodeURIComponent(trigger.getAttribute('data-clipboard-text') || '')
-    },
-  })
-  return clipboard
-}
-
-function filterMarkdown(text: string): string {
-  const md = new MarkdownIt()
-  // Convert Markdown to HTML using markdown-it
-  const html = md.render(text)
-  // Convert HTML to DOM objects using DOMParser
-  const parser = new DOMParser()
-  const doc = parser.parseFromString(html, 'text/html')
-  // Get filtered text content
-  const filteredText = doc.body.textContent || ''
-  return filteredText
 }
 
 function mergeSentences(sentences: string[], sentenceLength = 20): string[] {
@@ -94,31 +72,33 @@ function mergeSentences(sentences: string[], sentenceLength = 20): string[] {
 }
 
 function MessageItem(props: Props) {
-  const { id, role, parts, attachments, onRegenerate } = props
+  const { id, role, parts, attachments, groundingMetadata, onRegenerate } = props
   const { t } = useTranslation()
+  const contentRef = useRef<HTMLDivElement>(null)
   const [html, setHtml] = useState<string>('')
+  const [thoughtsHtml, setThoughtsHtml] = useState<string>('')
   const chatLayout = useMessageStore((state) => state.chatLayout)
-  const [hasTextContent, setHasTextContent] = useState<boolean>(false)
   const [isEditing, setIsEditing] = useState<boolean>(false)
   const [isCopyed, setIsCopyed] = useState<boolean>(false)
   const [showLightbox, setShowLightbox] = useState<boolean>(false)
   const [lightboxIndex, setLightboxIndex] = useState<number>(0)
   const fileList = useMemo(() => {
-    return attachments ? attachments.filter((item) => !item.metadata?.mimeType.startsWith('image/')) : []
+    return attachments ? attachments.filter((item) => !item.mimeType.startsWith('image/')) : []
   }, [attachments])
   const inlineImageList = useMemo(() => {
     const imageList: string[] = []
     parts.forEach(async (part) => {
-      if (part.inlineData?.mimeType.startsWith('image/')) {
-        imageList.push(`data:${part.inlineData.mimeType};base64,${part.inlineData.data}`)
-      } else if (part.fileData && attachments) {
+      if (part.fileData && attachments) {
         for (const attachment of attachments) {
           if (attachment.metadata?.uri === part.fileData.fileUri) {
-            if (part.fileData?.mimeType.startsWith('image/') && attachment.preview) {
-              imageList.push(attachment.preview)
+            if (part.fileData?.mimeType.startsWith('image/')) {
+              if (attachment.dataUrl) imageList.push(attachment.dataUrl)
+              if (attachment.preview) imageList.push(attachment.preview)
             }
           }
         }
+      } else if (part.inlineData?.mimeType.startsWith('image/')) {
+        imageList.push(`data:${part.inlineData.mimeType};base64,${part.inlineData.data}`)
       }
     })
     return imageList
@@ -155,9 +135,10 @@ function MessageItem(props: Props) {
 
     if (message) {
       const messageParts = [...message.parts]
-      messageParts.map((part) => {
-        if (part.text) part.text = content
-      })
+      const textPartIndex = findLastIndex(messageParts, (item) => !isUndefined(item.text))
+      if (textPartIndex !== -1) {
+        messageParts[textPartIndex].text = content
+      }
       update(id, { ...message, parts: messageParts })
     }
 
@@ -171,14 +152,21 @@ function MessageItem(props: Props) {
 
   const handleCopy = useCallback(() => {
     setIsCopyed(true)
+    copy(content)
     setTimeout(() => {
       setIsCopyed(false)
-    }, 2000)
-  }, [])
+    }, 1200)
+  }, [content])
 
   const handleSpeak = useCallback(async () => {
+    if (!contentRef.current) return false
+
     const { lang, ttsLang, ttsVoice } = useSettingStore.getState()
-    const sentences = mergeSentences(sentenceSegmentation(filterMarkdown(content), lang), 100)
+    const content = convert(contentRef.current.innerHTML, {
+      wordwrap: false,
+      selectors: [{ selector: 'ul', options: { itemPrefix: '  ' } }],
+    })
+    const sentences = mergeSentences(sentenceSegmentation(content, lang), 100)
     const edgeSpeech = new EdgeSpeech({ locale: ttsLang })
     const audioStream = new AudioStream()
 
@@ -192,95 +180,12 @@ function MessageItem(props: Props) {
         audioStream.play({ audioData })
       }
     }
-  }, [content])
+  }, [])
 
   const openLightbox = useCallback((index: number) => {
     setLightboxIndex(index)
     setShowLightbox(true)
   }, [])
-
-  const render = useCallback(
-    (content: string) => {
-      const md: MarkdownIt = MarkdownIt({
-        linkify: true,
-        breaks: true,
-      })
-        .use(markdownHighlight)
-        .use(markdownKatex)
-
-      // Save the original text rule
-      const defaultTextRules = md.renderer.rules.text!
-
-      // Rewrite the `strong` rule to adapt to Gemini generation grammar
-      md.renderer.rules.text = (tokens, idx, options, env, self) => {
-        const token = tokens[idx]
-        const content = token.content
-
-        // Check whether it conforms to the `strong` format
-        const match = content.match(/^\*\*(.+?)\*\*(.+)/)
-        if (match) {
-          return `<b>${match[1]}</b>${match[2]}`
-        }
-
-        // If the format is not met, the original `strong` rule is called
-        return defaultTextRules(tokens, idx, options, env, self)
-      }
-
-      md.renderer.rules.table_open = function (tokens, idx, options) {
-        return `<div style="overflow-x:auto;"><table>`
-      }
-
-      md.renderer.rules.table_close = function (tokens, idx, options) {
-        return '</table></div>'
-      }
-
-      const mathLineRender = md.renderer.rules.math_inline!
-      md.renderer.rules.math_inline = (...params) => {
-        const [tokens, idx] = params
-        const token = tokens[idx]
-        return `
-          <div class="katex-inline-warpper">
-            <span class="copy copy-katex-inline" data-clipboard-text="${encodeURIComponent(token.content)}">${t(
-              'copy',
-            )}</span>
-            ${mathLineRender(...params)}
-          </div>
-        `
-      }
-      const mathBlockRender = md.renderer.rules.math_block!
-      md.renderer.rules.math_block = (...params) => {
-        const [tokens, idx] = params
-        const token = tokens[idx]
-        return `
-          <div class="katex-block-warpper">
-            <span class="copy copy-katex-block" data-clipboard-text="${encodeURIComponent(token.content)}">${t(
-              'copy',
-            )}</span>
-            ${mathBlockRender(...params)}
-          </div>
-        `
-      }
-      const highlightRender = md.renderer.rules.fence!
-      md.renderer.rules.fence = (...params) => {
-        const [tokens, idx] = params
-        const token = tokens[idx]
-        const lang = token.info.trim()
-        return `
-          <div class="hljs-warpper">
-            <div class="info">
-              <span class="lang">${upperFirst(lang)}</span>
-              <span class="copy copy-code" data-clipboard-text="${encodeURIComponent(token.content)}">${t(
-                'copy',
-              )}</span>
-            </div>
-            ${highlight.getLanguage(lang) ? highlightRender(...params) : null}
-          </div>
-        `
-      }
-      return md.render(content)
-    },
-    [t],
-  )
 
   const MessageAvatar = () => {
     if (role === 'user') {
@@ -341,12 +246,12 @@ function MessageItem(props: Props) {
                 <CircleCheck className="ml-1.5 h-5 w-5" />
               </Button>
             </div>
-            {detail.id === OFFICAL_PLUGINS.SEARCH ? (
-              <WebSearch data={detail.response.content as SearchResult[]} />
-            ) : null}
             {detail.id === OFFICAL_PLUGINS.WEATHER ? <Weather data={detail.response.content as WeatherResult} /> : null}
             {detail.id === OFFICAL_PLUGINS.UNSPLASH ? (
               <Unsplash data={detail.response.content as UnsplashImage[]} />
+            ) : null}
+            {detail.id === OFFICAL_PLUGINS.IMAGEN ? (
+              <Imagen data={(detail.response.content as ImageGenerationResponse)?.images} />
             ) : null}
             {detail.id === OFFICAL_PLUGINS.ARXIV ? (
               <Arxiv data={(detail.response.content as ArxivResult)?.data} />
@@ -365,7 +270,7 @@ function MessageItem(props: Props) {
       })
     } else {
       return (
-        <div className="group flex-auto">
+        <div className="group flex-auto overflow-x-auto">
           {fileList.length > 0 ? (
             <div className="not:last:border-dashed not:last:border-b w-full pb-2">
               <FileList fileList={fileList} />
@@ -395,13 +300,42 @@ function MessageItem(props: Props) {
           ) : null}
           {!isEditing ? (
             <>
-              <div
-                className="prose chat-content break-words text-base leading-8"
-                dangerouslySetInnerHTML={{ __html: html }}
-              ></div>
+              {thoughtsHtml !== '' ? (
+                <Accordion type="single" collapsible>
+                  <AccordionItem value="thoughts">
+                    <AccordionTrigger className="py-1">
+                      <span className="flex text-slate-700">
+                        {t('thoughts')}
+                        {html === '' ? (
+                          <LoaderCircle className="ml-2 mt-0.5 h-5 w-5 animate-spin" />
+                        ) : (
+                          t('expandThoughts')
+                        )}
+                      </span>
+                    </AccordionTrigger>
+                    <AccordionContent>
+                      <Magicdown>{thoughtsHtml}</Magicdown>
+                    </AccordionContent>
+                  </AccordionItem>
+                </Accordion>
+              ) : null}
+              <div ref={contentRef}>
+                <Magicdown>{html}</Magicdown>
+              </div>
+              {groundingMetadata ? (
+                <div
+                  className="mx-0.5 my-2"
+                  dangerouslySetInnerHTML={{
+                    __html:
+                      groundingMetadata.searchEntryPoint?.renderedContent
+                        ?.replace('margin: 0 8px', 'margin: 0 4px')
+                        .replaceAll('<a', '<a target="_blank"') || '',
+                  }}
+                ></div>
+              ) : null}
               <div
                 className={cn(
-                  'flex gap-1 text-right opacity-0 transition-opacity duration-300 group-hover:opacity-100',
+                  'flex gap-1 text-right opacity-0 transition-opacity duration-300 group-hover:opacity-100 max-md:opacity-30',
                   role === 'user' && chatLayout === 'chat' ? 'justify-start' : 'justify-end',
                 )}
               >
@@ -411,20 +345,16 @@ function MessageItem(props: Props) {
                       title={t(role === 'user' ? 'resend' : 'regenerate')}
                       onClick={() => handleRegenerate(id)}
                     >
-                      {role === 'user' ? <RotateCw className="h-4 w-4" /> : <Sparkles className="h-4 w-4" />}
+                      <RotateCw className="h-4 w-4" />
                     </IconButton>
                     <IconButton title={t('edit')} onClick={() => setIsEditing(true)}>
                       <PencilLine className="h-4 w-4" />
                     </IconButton>
+                    <IconButton title={t('copy')} onClick={() => handleCopy()}>
+                      {isCopyed ? <CopyCheck className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
+                    </IconButton>
                     <IconButton title={t('delete')} onClick={() => handleDelete(id)}>
                       <Eraser className="h-4 w-4" />
-                    </IconButton>
-                  </>
-                ) : null}
-                {hasTextContent ? (
-                  <>
-                    <IconButton title={t('copy')} className={`copy-${id}`} onClick={() => handleCopy()}>
-                      {isCopyed ? <CopyCheck className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
                     </IconButton>
                     <IconButton title={t('speak')} onClick={() => handleSpeak()}>
                       <Volume2 className="h-4 w-4" />
@@ -437,7 +367,7 @@ function MessageItem(props: Props) {
             <EditableArea
               content={content}
               isEditing={isEditing}
-              onChange={(content) => handleEdit(id, content)}
+              onChange={(editedContent) => handleEdit(id, editedContent)}
               onCancel={() => setIsEditing(false)}
             />
           )}
@@ -447,29 +377,35 @@ function MessageItem(props: Props) {
   }
 
   useEffect(() => {
-    const messageParts: string[] = []
-    parts.forEach(async (part) => {
-      if (part.text) {
-        messageParts.push(render(part.text))
-        setHasTextContent(true)
+    const textParts = parts.filter((item) => !isUndefined(item.text))
+    if (role === 'model' && textParts.length === 2) {
+      if (textParts[0].text) {
+        setThoughtsHtml(textParts[0].text)
       }
-    })
-    setHtml(messageParts.join(''))
-    const copyKatexInline = registerCopy('.copy-katex-inline')
-    const copyKatexBlock = registerCopy('.copy-katex-block')
-    const copyCode = registerCopy('.copy-code')
-
-    const copyContent = new Clipboard(`.copy-${id}`, {
-      text: () => content,
-    })
-    return () => {
-      setHtml('')
-      copyKatexInline.destroy()
-      copyKatexBlock.destroy()
-      copyCode.destroy()
-      copyContent.destroy()
+      if (textParts[1].text) {
+        setHtml(textParts[1].text)
+      }
+    } else {
+      const messageParts: string[] = []
+      parts.forEach(async (part) => {
+        if (part.text) {
+          messageParts.push(part.text)
+        }
+      })
+      let content = messageParts.join('')
+      if (groundingMetadata) {
+        const { groundingSupports = [], groundingChunks = [] } = groundingMetadata
+        groundingSupports.forEach((item) => {
+          content = content.replace(
+            item.segment.text,
+            `${item.segment.text}${item.groundingChunkIndices.map((indice) => `[[${indice + 1}][gs-${indice}]]`).join('')}`,
+          )
+        })
+        content += `\n\n${groundingChunks.map((item, idx) => `[gs-${idx}]: <${item.web?.uri}> "${item.web?.title}"`).join('\n')}`
+      }
+      setHtml(content)
     }
-  }, [id, content, parts, attachments, render])
+  }, [id, role, content, parts, attachments, groundingMetadata])
 
   return (
     <>

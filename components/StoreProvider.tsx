@@ -1,13 +1,26 @@
 'use client'
 import { useLayoutEffect } from 'react'
-import { useSettingStore } from '@/store/setting'
+import { useEnvStore } from '@/store/setting'
 
-function StoreProvider({ children, isProtected = false }: { children: React.ReactNode; isProtected?: boolean }) {
-  const { setIsProtected } = useSettingStore()
+const NEXT_PUBLIC_BUILD_MODE = process.env.NEXT_PUBLIC_BUILD_MODE || 'default'
 
+interface Props {
+  children: React.ReactNode
+}
+
+function StoreProvider({ children }: Props) {
   useLayoutEffect(() => {
-    setIsProtected(isProtected)
-  }, [setIsProtected, isProtected])
+    if (NEXT_PUBLIC_BUILD_MODE !== 'export') {
+      const { update } = useEnvStore.getState()
+      fetch('/api/env')
+        .then(async (response) => {
+          const env = await response.json()
+          update(env)
+        })
+        .catch(console.error)
+    }
+  }, [])
+
   return children
 }
 

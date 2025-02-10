@@ -84,3 +84,38 @@ export function base64ToBlob(base64String: string, contentType: string = ''): Bl
   const byteArray = new Uint8Array(byteNumbers)
   return new Blob([byteArray], { type: contentType })
 }
+
+export function downloadFile(content: string, filename: string, fileType: string) {
+  // Prepending a BOM sequence at the beginning of the text file to encoded as UTF-8.
+  const BOM = new Uint8Array([0xef, 0xbb, 0xbf])
+  const blob = new Blob([BOM, content], { type: fileType })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = filename
+  document.body.appendChild(a)
+  a.click()
+  document.body.removeChild(a)
+  URL.revokeObjectURL(url)
+}
+
+export function hasUploadFiles(messages: Message[] = []): boolean {
+  return messages.some((message) => message.parts.some((part) => part.fileData))
+}
+
+export function getRandomKey(apiKey: string, useUploadKey = false): string {
+  const apiKeyList = apiKey.split(',')
+  if (apiKeyList[0].startsWith('AI') && apiKeyList[0].length === 39) {
+    if (apiKeyList.length === 1) return apiKeyList[0]
+    return useUploadKey ? apiKeyList[0] : shuffleArray(apiKeyList)[0]
+  } else {
+    return apiKey
+  }
+}
+
+export function convertSvgToImage(svg: ChildNode | null) {
+  if (svg) {
+    const text = new XMLSerializer().serializeToString(svg)
+    return downloadFile(text, 'Mermaid', 'image/svg+xml')
+  }
+}

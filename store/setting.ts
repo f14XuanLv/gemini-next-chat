@@ -1,40 +1,54 @@
 import { create } from 'zustand'
 import { persist, type StorageValue } from 'zustand/middleware'
 import storage from '@/utils/Storage'
+import { DefaultModel } from '@/constant/model'
 import { omitBy, isFunction, isNull } from 'lodash-es'
+
+type DefaultSetting = Omit<Setting, 'isProtected' | 'talkMode' | 'sidebarState'>
 
 interface SettingStore extends Setting {
   update: (values: Partial<Setting>) => void
-  setIsProtected: (isProtected: boolean) => void
+  reset: () => DefaultSetting
 }
 
-const ASSISTANT_INDEX_URL = process.env.NEXT_PUBLIC_ASSISTANT_INDEX_URL as string
+interface EnvStore {
+  modelList: string
+  uploadLimit: number
+  buildMode: string
+  isProtected: boolean
+  update: (values: Record<string, string | number | boolean>) => void
+}
+
+const defaultSetting: DefaultSetting = {
+  password: '',
+  apiKey: '',
+  apiProxy: '',
+  model: DefaultModel,
+  sttLang: '',
+  ttsLang: '',
+  ttsVoice: '',
+  lang: '',
+  maxHistoryLength: 0,
+  assistantIndexUrl: '',
+  topP: 0.95,
+  topK: 40,
+  temperature: 1,
+  maxOutputTokens: 8192,
+  safety: 'none',
+  autoStopRecord: false,
+}
 
 export const useSettingStore = create(
   persist<SettingStore>(
-    (set, get) => ({
-      password: '',
-      apiKey: '',
-      apiProxy: 'https://generativelanguage.googleapis.com',
-      uploadProxy: 'https://generativelanguage.googleapis.com',
-      model: 'gemini-1.5-flash-latest',
-      sttLang: '',
-      ttsLang: '',
-      ttsVoice: '',
-      lang: '',
-      isProtected: false,
+    (set) => ({
+      ...defaultSetting,
       talkMode: 'chat',
-      maxHistoryLength: 0,
-      assistantIndexUrl: ASSISTANT_INDEX_URL || 'https://registry.npmmirror.com/@lobehub/agents-index/v1/files/public',
-      topP: 0.95,
-      topK: 40,
-      temperature: 1,
-      maxOutputTokens: 8192,
-      safety: 'none',
-      autoStopRecord: false,
       sidebarState: 'collapsed',
       update: (values) => set((state) => ({ ...state, ...values })),
-      setIsProtected: (isProtected) => set({ isProtected }),
+      reset: () => {
+        set(defaultSetting)
+        return defaultSetting
+      },
     }),
     {
       name: 'settingStore',
@@ -53,7 +67,6 @@ export const useSettingStore = create(
                 'password',
                 'apiKey',
                 'apiProxy',
-                'uploadProxy',
                 'model',
                 'sttLang',
                 'ttsLang',
@@ -94,3 +107,11 @@ export const useSettingStore = create(
     },
   ),
 )
+
+export const useEnvStore = create<EnvStore>((set) => ({
+  modelList: '',
+  uploadLimit: 0,
+  buildMode: '',
+  isProtected: true,
+  update: (values) => set(values),
+}))

@@ -1,7 +1,17 @@
 'use client'
 import { useCallback, memo, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { MessageSquarePlus, EllipsisVertical, Pin, PinOff, Copy, PencilLine, WandSparkles, Trash } from 'lucide-react'
+import {
+  MessageSquarePlus,
+  EllipsisVertical,
+  Pin,
+  PinOff,
+  Copy,
+  PencilLine,
+  WandSparkles,
+  Trash,
+  Download,
+} from 'lucide-react'
 import {
   Sidebar,
   SidebarHeader,
@@ -26,8 +36,10 @@ import SearchBar from '@/components/SearchBar'
 import { useMessageStore } from '@/store/chat'
 import { useConversationStore } from '@/store/conversation'
 import { useSettingStore } from '@/store/setting'
+import { GEMINI_API_BASE_URL } from '@/constant/urls'
 import { encodeToken } from '@/utils/signature'
 import summaryTitle, { type RequestProps } from '@/utils/summaryTitle'
+import { downloadFile } from '@/utils/common'
 import { cn } from '@/utils'
 import { customAlphabet } from 'nanoid'
 import { entries, isNull } from 'lodash-es'
@@ -71,41 +83,25 @@ function ConversationItem(props: Props) {
   const { setTitle } = useMessageStore()
   const [customTitle, setCustomTitle] = useState<string>(title)
   const [editTitleMode, setEditTitleMode] = useState<boolean>(false)
-  const conversationTitle = useMemo(() => (title === '' ? t('chatAnything') : title), [title, t])
-
-  const handleSelect = useCallback((id: string) => {
-    const { currentId, query, addOrUpdate, setCurrentId } = useConversationStore.getState()
-    const { backup, restore } = useMessageStore.getState()
-    const oldConversation = backup()
-    addOrUpdate(currentId, oldConversation)
-
-    const newConversation = query(id)
-    setCurrentId(id)
-    restore(newConversation)
-  }, [])
-
-  const editTitle = useCallback(
-    (text: string) => {
-      setTitle(text)
-      setEditTitleMode(false)
-    },
-    [setTitle],
-  )
+  const conversationTitle = useMemo(() => (title ? title : t('chatAnything')), [title, t])
 
   const handleSummaryTitle = useCallback(async (id: string) => {
-    const { lang, apiKey, apiProxy, model, password } = useSettingStore.getState()
+    const { lang, apiKey, apiProxy, password } = useSettingStore.getState()
     const { currentId, query, addOrUpdate } = useConversationStore.getState()
     const { messages, systemInstruction, setTitle } = useMessageStore.getState()
+
     const conversation = query(id)
     const config: RequestProps = {
       apiKey,
-      model,
       lang,
       messages: id === currentId ? messages : conversation.messages,
       systemRole: id === currentId ? systemInstruction : conversation.systemInstruction,
     }
+
+    if (config.messages.length === 0) return false
+
     if (apiKey !== '') {
-      if (apiProxy) config.baseUrl = apiProxy
+      config.baseUrl = apiProxy || GEMINI_API_BASE_URL
     } else {
       config.apiKey = encodeToken(password)
       config.baseUrl = '/api/google'
@@ -117,10 +113,126 @@ function ConversationItem(props: Props) {
       const { done, value } = await reader.read()
       if (done) break
       content += new TextDecoder().decode(value)
-      addOrUpdate(id, { ...conversation, title: content })
     }
+    addOrUpdate(id, { ...conversation, title: content })
     if (id === currentId) setTitle(content)
   }, [])
+
+  const handleSelect = useCallback(
+    (id: string) => {
+      const { currentId, query, addOrUpdate, setCurrentId } = useConversationStore.getState()
+      const { title, backup, restore } = useMessageStore.getState()
+      const oldConversation = backup()
+      addOrUpdate(currentId, oldConversation)
+
+      const newConversation = query(id)
+      setCurrentId(id)
+      restore(newConversation)
+
+      if (!title && currentId !== 'default') handleSummaryTitle(currentId)
+    },
+    [handleSummaryTitle],
+  )
+
+  const editTitle = useCallback(
+    (text: string) => {
+      setTitle(text)
+      setEditTitleMode(false)
+    },
+    [setTitle],
+  )
+
+  const handleCopy = useCallback(
+    (id: string) => {
+      const { query, addOrUpdate } = useConversationStore.getState()
+      const { backup } = useMessageStore.getState()
+      let conversation
+      const newId = nanoid()
+      if (id === 'default') {
+        conversation = backup()
+        addOrUpdate(newId, conversation)
+      } else {
+        conversation = query(id)
+        copy(id, newId)
+      }
+      if (!conversation.title) {
+        handleSummaryTitle(newId)
+      }
+    },
+    [handleSummaryTitle, copy],
+  )
+
+  const handleDelete = useCallback(
+    (id: string) => {
+      const { currentId, setCurrentId, query } = useConversationStore.getState()
+      const { restore } = useMessageStore.getState()
+      if (id === currentId) {
+        setCurrentId('default')
+        const newConversation = query('default')
+        restore(newConversation)
+      }
+      remove(id)
+    },
+    [remove],
+  )
+
+  const exportConversation = useCallback(
+    (id: string) => {
+      const { currentId, query } = useConversationStore.getState()
+      const { backup } = useMessageStore.getState()
+      const conversation = id === currentId ? backup() : query(id)
+      let mdContentList: string[] = []
+
+      const wrapJsonCode = (content: string) => {
+        return `\`\`\`json\n${content}\n\`\`\``
+      }
+
+      if (conversation.systemInstruction) {
+        mdContentList.push('> SystemInstruction')
+        mdContentList.push(conversation.systemInstruction)
+      }
+      conversation.messages.forEach((item) => {
+        if (item.role === 'user') {
+          mdContentList.push('> User')
+        } else if (item.role === 'model') {
+          mdContentList.push('> AI')
+        } else if (item.role === 'function') {
+          mdContentList.push('> Plugin')
+        }
+        item.parts.forEach((part) => {
+          if (part.fileData) {
+            mdContentList.push(`[${part.fileData.mimeType}](${part.fileData.fileUri})`)
+          } else if (part.inlineData) {
+            mdContentList.push(
+              `${part.inlineData.mimeType.startsWith('data:image/') ? '!' : ''}[${part.inlineData.mimeType}](data:${part.inlineData.mimeType};base64,${part.inlineData.data})`,
+            )
+          } else if (part.functionCall) {
+            mdContentList.push(part.functionCall.name)
+            mdContentList.push(wrapJsonCode(JSON.stringify(part.functionCall.args, null, 2)))
+          } else if (part.functionResponse) {
+            mdContentList.push(part.functionResponse.name)
+            mdContentList.push(wrapJsonCode(JSON.stringify(part.functionResponse.response, null, 2)))
+          } else if (part.text) {
+            let content = part.text
+            if (item.groundingMetadata) {
+              const { groundingSupports = [], groundingChunks = [] } = item.groundingMetadata
+              groundingSupports.forEach((item) => {
+                content = content.replace(
+                  item.segment.text,
+                  `${item.segment.text}${item.groundingChunkIndices.map((indice) => `[[${indice + 1}][gs-${indice}]]`).join('')}`,
+                )
+              })
+              content += `\n\n${groundingChunks.map((item, idx) => `[gs-${idx}]: <${item.web?.uri}> "${item.web?.title}"`).join('\n')}`
+            }
+            mdContentList.push(content)
+          }
+        })
+      })
+      const mdContent = mdContentList.join('\n\n')
+      downloadFile(mdContent, conversation.title ?? t('chatAnything'), 'text/markdown')
+    },
+    [t],
+  )
 
   return (
     <div
@@ -178,9 +290,13 @@ function ConversationItem(props: Props) {
                   )}
                 </DropdownMenuItem>
               ) : null}
-              <DropdownMenuItem onClick={() => copy(id)}>
+              <DropdownMenuItem onClick={() => handleCopy(id)}>
                 <Copy />
                 <span>{t('newCopy')}</span>
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => exportConversation(id)}>
+                <Download />
+                <span>{t('exportConversation')}</span>
               </DropdownMenuItem>
               {id !== 'default' ? (
                 <DropdownMenuGroup>
@@ -193,7 +309,7 @@ function ConversationItem(props: Props) {
                     <PencilLine />
                     <span>{t('rename')}</span>
                   </DropdownMenuItem>
-                  <DropdownMenuItem className="text-red-500" onClick={() => remove(id)}>
+                  <DropdownMenuItem className="text-red-500" onClick={() => handleDelete(id)}>
                     <Trash />
                     <span>{t('delete')}</span>
                   </DropdownMenuItem>

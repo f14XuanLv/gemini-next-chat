@@ -1,8 +1,9 @@
 import { GoogleGenerativeAI, HarmCategory, HarmBlockThreshold } from '@google/generative-ai'
-import type { InlineDataPart, ModelParams, Tool, ToolConfig } from '@google/generative-ai'
+import type { InlineDataPart, ModelParams, Tool, ToolConfig, Part, SafetySetting } from '@google/generative-ai'
 import { getVisionPrompt, getFunctionCallPrompt } from '@/utils/prompt'
-import { OldVisionModel } from '@/constant/model'
-import { isUndefined, pick } from 'lodash-es'
+import { hasUploadFiles, getRandomKey } from '@/utils/common'
+import { OldVisionModel, DefaultModel } from '@/constant/model'
+import { isUndefined } from 'lodash-es'
 
 export type RequestProps = {
   model?: string
@@ -19,6 +20,11 @@ export type RequestProps = {
     maxOutputTokens: number
   }
   safety: string
+}
+
+export type NewModelParams = ModelParams & {
+  tools?: Array<Tool | { googleSearch: {} } | { codeExecution: {} }>
+  safetySettings?: SafetySetting[] & Array<{ category: string; threshold: string }>
 }
 
 export function getSafetySettings(level: string) {
@@ -50,19 +56,30 @@ export function getSafetySettings(level: string) {
   })
 }
 
+function canUseSearchAsTool(model: string) {
+  if (model.startsWith('gemini-2.0-flash') || model.startsWith('gemini-2.0-pro')) {
+    if (model.includes('lite') || model.includes('thinking')) return false
+    return true
+  }
+}
+
 export default async function chat({
   messages = [],
   systemInstruction,
   tools,
   toolConfig,
-  model = 'gemini-1.5-flash-latest',
+  model = DefaultModel,
   apiKey,
   baseUrl,
   generationConfig,
   safety,
 }: RequestProps) {
-  const genAI = new GoogleGenerativeAI(apiKey)
-  const modelParams: ModelParams = { model, generationConfig, safetySettings: getSafetySettings(safety) }
+  const genAI = new GoogleGenerativeAI(getRandomKey(apiKey, hasUploadFiles(messages)))
+  const modelParams: NewModelParams = {
+    model,
+    generationConfig,
+    safetySettings: getSafetySettings(safety),
+  }
   if (systemInstruction) {
     if (!model.startsWith('gemini-1.0')) {
       modelParams.systemInstruction = systemInstruction
@@ -85,6 +102,27 @@ export default async function chat({
       temperature: 0,
     }
     if (toolConfig) modelParams.toolConfig = toolConfig
+  }
+  if (canUseSearchAsTool(model)) {
+    const officialPlugins = [{ googleSearch: {} }]
+    if (!tools) {
+      modelParams.tools = officialPlugins
+    }
+    if (modelParams.safetySettings) {
+      const safetySettings: NewModelParams['safetySettings'] = []
+      modelParams.safetySettings.forEach((item) => {
+        if (safety === 'none') {
+          safetySettings.push({ category: item.category, threshold: 'OFF' })
+        } else {
+          safetySettings.push(item)
+        }
+      })
+      safetySettings.push({
+        category: 'HARM_CATEGORY_CIVIC_INTEGRITY',
+        threshold: HarmBlockThreshold.BLOCK_NONE,
+      })
+      modelParams.safetySettings = safetySettings
+    }
   }
   const geminiModel = genAI.getGenerativeModel(modelParams, { baseUrl })
   const message = messages.pop()
@@ -113,7 +151,23 @@ export default async function chat({
     return stream
   } else {
     const chat = geminiModel.startChat({
-      history: messages.map((item) => pick(item, ['role', 'parts'])),
+      history: messages.map((item) => {
+        let parts: Part[] = []
+        if (item.role === 'model') {
+          let textPart: Part | null = null
+          for (const part of item.parts) {
+            if (part.text) {
+              textPart = part
+            } else {
+              parts.push(part)
+            }
+          }
+          if (textPart) parts = [textPart, ...parts]
+        } else {
+          parts = item.parts
+        }
+        return { role: item.role, parts }
+      }),
     })
     const { stream } = await chat.sendMessageStream(message.parts)
     return stream

@@ -12,12 +12,13 @@ Deploy your private Gemini application for free with one click, supporting Gemin
 
 **English** · [简体中文](./README.zh-CN.md)
 
-[![GeminiNextChat](https://trendshift.io/api/badge/repositories/10384)](https://trendshift.io/repositories/10384)
+[![Vercel](https://img.shields.io/badge/Vercel-111111?style=flat&logo=vercel&logoColor=white)](https://vercel.com/new/clone?repository-url=https%3A%2F%2Fgithub.com%2Fu14app%2Fgemini-next-chat&project-name=gemini-next-chat&env=GEMINI_API_KEY&env=ACCESS_PASSWORD&repository-name=gemini-next-chat)
+[![Cloudflare](https://img.shields.io/badge/Cloudflare-F69652?style=flat&logo=cloudflare&logoColor=white)](#deploy-to-cloudflare)
 
 [![Gemini](https://img.shields.io/badge/Gemini-8E75B2?style=flat&logo=googlegemini&logoColor=white)](https://ai.google.dev/)
-[![Next](https://img.shields.io/badge/Next.js-000000?style=flat&logo=nextdotjs&logoColor=white)](https://nextjs.org/)
+[![Next](https://img.shields.io/badge/Next.js-111111?style=flat&logo=nextdotjs&logoColor=white)](https://nextjs.org/)
 [![Tailwind CSS](https://img.shields.io/badge/Tailwind%20CSS-06B6D4?style=flat&logo=tailwindcss&logoColor=white)](https://tailwindcss.com/)
-[![shadcn/ui](https://img.shields.io/badge/shadcn/ui-000000?style=flat&logo=shadcnui&logoColor=white)](https://ui.shadcn.com/)
+[![shadcn/ui](https://img.shields.io/badge/shadcn/ui-111111?style=flat&logo=shadcnui&logoColor=white)](https://ui.shadcn.com/)
 
 [![Web][Web-image]][web-url]
 [![MacOS][MacOS-image]][download-url]
@@ -59,9 +60,9 @@ Deploy your private Gemini application for free with one click, supporting Gemin
 
 Simple interface, supports image recognition and voice conversation
 
-![Gemini 1.5 Flash](./public/screenshots/pc-screenshot-1.png)
+![Gemini](./public/screenshots/pc-screenshot-1.png)
 
-Supports Gemini 1.5 and Gemini 1.5 Flash multimodal models
+Supports Gemini 1.5 and Gemini 2.0 multimodal models
 
 ![Support plugins](./public/screenshots/pc-screenshot-3.jpg)
 
@@ -90,8 +91,8 @@ A cross-platform application client that supports a permanent menu bar, doubling
   - [Docker (Recommended)](#docker-recommended)
   - [Static Deployment](#static-deployment)
 - [FAQ](#faq)
-- [Star History](#star-history)
 - [LICENSE](#license)
+- [Star History](#star-history)
 
 ## Features
 
@@ -103,7 +104,8 @@ A cross-platform application client that supports a permanent menu bar, doubling
 - Assistant market with hundreds of selected system instruction
 - Support plugins, with built-in Web search, Web reader, Arxiv search, Weather and other practical plugins
 - Conversation list, so you can keep track of important conversations or discuss different topics with Gemini
-- Full Markdown support: LaTex formulas, code highlighting, and more
+- Artifact support, allowing you to modify the conversation content more elegantly
+- Full Markdown support: KaTex formulas, code highlighting, Mermaid charts, etc.
 - Automatically compress contextual chat records to save Tokens while supporting very long conversations
 - Privacy and security, all data is saved locally in the user's browser
 - Support PWA, can run as an application
@@ -118,13 +120,21 @@ A cross-platform application client that supports a permanent menu bar, doubling
 - [x] Use tauri to package desktop applications
 - [x] Implementation based on functionCall plug-in
 - [x] Support conversation list
+- [x] Support conversation export features
+- [ ] Enable Multimodal Live API
 
 ## Get Started
 
 1. Get [Gemini API Key](https://aistudio.google.com/app/apikey)
-2. Click
+2. One-click deployment of the project, you can choose to deploy to Vercel
+
    [![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https%3A%2F%2Fgithub.com%2Fu14app%2Fgemini-next-chat&project-name=gemini-next-chat&env=GEMINI_API_KEY&env=ACCESS_PASSWORD&repository-name=gemini-next-chat)
+
 3. Start using
+
+### Deploy to Cloudflare
+
+Currently the project supports deployment to Cloudflare, but you need to follow [How to deploy to Cloudflare Page](./docs/How-to-deploy-to-Cloudflare-Page.md) to do it.
 
 ### Updating Code
 
@@ -136,7 +146,8 @@ You can star or watch this project or follow author to get release notifications
 
 #### `GEMINI_API_KEY` (optional)
 
-Your Gemini api key. If you need to `enable` the server api, this is required.
+Your Gemini api key. This is required if you need to `enable` the server api. **This variable does not affect the value of the Gemini key on the frontend pages.**
+Supports multiple keys, each key is separated by `,`, i.e. `key1,key2,key3`
 
 #### `GEMINI_API_BASE_URL` (optional)
 
@@ -144,27 +155,11 @@ Your Gemini api key. If you need to `enable` the server api, this is required.
 
 > Examples: `http://your-gemini-proxy.com`
 
-Override Gemini api request base url. **To avoid server-side proxy url leaks, links in front-end pages will not be overwritten. **
-
-#### `GEMINI_UPLOAD_BASE_URL` (optional)
-
-> Default: `https://generativelanguage.googleapis.com`
-
-> Example: `http://your-gemini-upload-proxy.com`
-
-Override Gemini file upload api base url. **To avoid server-side proxy url leaks, links in front-end pages will not be overwritten. **
+Override the Gemini api request base url. **In order to avoid server-side proxy url leakage, the value in the front-end page will not be overwritten and affected.**
 
 #### `NEXT_PUBLIC_GEMINI_MODEL_LIST` (optional)
 
 Custom model list, default: all.
-
-#### `NEXT_PUBLIC_ASSISTANT_INDEX_URL` (optional)
-
-> Default: `https://chat-agents.lobehub.com`
-
-> Examples: `http://your-assistant-market-proxy.com`
-
-Override assistant market api request base url. The api link in the front-end interface will be adjusted synchronously.
 
 #### `NEXT_PUBLIC_UPLOAD_LIMIT` (optional)
 
@@ -271,7 +266,7 @@ pnpm build:export
 
 If you deploy the project in a subdirectory and encounter resource loading failures when accessing, please add `EXPORT_BASE_PATH=/path/project` in the `.env` file or variable setting page.
 
-## Thanks
+## Acknowledgments
 
 ### Technology Stack
 
@@ -284,7 +279,7 @@ If you deploy the project in a subdirectory and encounter resource loading failu
 
 - [Lobe Chat](https://github.com/lobehub/lobe-chat)
 - [ChatGPT-Next-Web](https://github.com/ChatGPTNextWeb/ChatGPT-Next-Web)
-- [GeminiProChat](https://github.com/babaohuang/GeminiProChat)
+- [Open Canvas](https://github.com/langchain-ai/open-canvas)
 
 ## FAQ
 
@@ -296,12 +291,25 @@ If you deploy the project in a subdirectory and encounter resource loading failu
 
 #### Why can’t I upload common documents such as doc, excel, and ppt?
 
-Currently, the two models `Gemini 1.5 Pro` and `Gemini 1.5 Flash` support most images, audios, videos and some text files. For details. For other document types, we will try to use [LangChain.js](https://js.langchain.com/v0.2/docs/introduction/) later.
+Currently, the two kind models `Gemini 1.5` and `Gemini 2.0` support most images, audios, videos and some text files. For details. For other document types, we will try to use [LangChain.js](https://js.langchain.com/v0.2/docs/introduction/) later.
+
+## Contributing
+
+Contributions to this project are welcome! If you would like to contribute, please follow these steps:
+
+1. Fork the repository on GitHub.
+2. Clone your fork to your local machine.
+3. Create a new branch for your changes.
+4. Make your changes and commit them to your branch.
+5. Push your changes to your fork on GitHub.
+6. Open a pull request from your branch to the main repository.
+
+Please ensure that your code follows the project's coding style and that all tests pass before submitting a pull request. If you find any bugs or have suggestions for improvements, feel free to open an issue on GitHub.
+
+## LICENSE
+
+This project is licensed under the [MIT](https://www.apache.org/licenses/LICENSE-2.0) License. See the LICENSE file for the full license text.
 
 ## Star History
 
 [![Star History Chart](https://api.star-history.com/svg?repos=u14app/gemini-next-chat&type=Date)](https://star-history.com/#u14app/gemini-next-chat&Date)
-
-## LICENSE
-
-[MIT](https://www.apache.org/licenses/LICENSE-2.0)

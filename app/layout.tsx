@@ -6,18 +6,16 @@ import StoreProvider from '@/components/StoreProvider'
 import I18Provider from '@/components/I18nProvider'
 import { SidebarProvider } from '@/components/ui/sidebar'
 import AppSidebar from '@/components/AppSidebar'
-import { isUndefined } from 'lodash-es'
 
 import './globals.css'
 
 const HEAD_SCRIPTS = process.env.HEAD_SCRIPTS as string
-const ENABLE_PROTECT = !isUndefined(process.env.ACCESS_PASSWORD) && process.env.ACCESS_PASSWORD !== ''
 
 const APP_NAME = 'Gemini Next Chat'
 const APP_DEFAULT_TITLE = 'Gemini Next Chat'
 const APP_TITLE_TEMPLATE = '%s - PWA App'
 const APP_DESCRIPTION =
-  'Deploy your private Gemini application for free with one click, supporting Gemini 1.5 Pro, Gemini 1.5 Flash, Gemini Pro and Gemini Pro Vision models. 一键免费部署您的私人 Gemini 应用, 支持 Gemini 1.5 Pro、Gemini 1.5 Flash、Gemini Pro 和 Gemini Pro Vision 模型。'
+  'Deploy your private Gemini application for free with one click, supporting Gemini 1.5 and Gemini 2.0 models. 一键免费部署您的私人 Gemini 应用, 支持 Gemini 1.5 和 Gemini 2.0 模型。'
 
 export const metadata: Metadata = {
   applicationName: APP_NAME,
@@ -26,7 +24,7 @@ export const metadata: Metadata = {
     template: APP_TITLE_TEMPLATE,
   },
   description: APP_DESCRIPTION,
-  keywords: ['Gemini', 'Gemini Pro', 'Gemini 1.5', 'Gemini Chat', 'AI', 'voice', 'Free Chatgpt', 'Chatgpt'],
+  keywords: ['Gemini', 'Gemini Pro', 'Gemini 1.5', 'Gemini 2.0', 'Gemini Chat', 'AI', 'Chatgpt'],
   icons: {
     icon: {
       type: 'image/svg+xml',
@@ -73,13 +71,13 @@ export const viewport: Viewport = {
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en" suppressHydrationWarning>
+    <html lang="en" dir="auto" suppressHydrationWarning>
       <head>{HEAD_SCRIPTS ? <Script id="headscript">{HEAD_SCRIPTS}</Script> : null}</head>
       <body>
         <ThemeProvider attribute="class" defaultTheme="system" enableSystem disableTransitionOnChange>
-          <StoreProvider isProtected={ENABLE_PROTECT}>
+          <StoreProvider>
             <I18Provider>
-              <SidebarProvider defaultOpen={false}>
+              <SidebarProvider defaultOpen>
                 <AppSidebar />
                 {children}
               </SidebarProvider>
